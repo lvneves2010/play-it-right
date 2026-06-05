@@ -1,0 +1,6 @@
+{
+  "appId": "com.playitright.app",
+  "appName": "Play it Right",
+  "bundledWebRuntime": false,
+  "webDir": "www"
+}

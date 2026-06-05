@@ -1,0 +1,16 @@
+{
+  "name": "Play it Right",
+  "short_name": "Play it Right",
+  "description": "Identifique notas musicais tocadas com seu instrumento ou som.",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#12192d",
+  "theme_color": "#7b61ff",
+  "icons": [
+    {
+      "src": "assets/icon/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}
