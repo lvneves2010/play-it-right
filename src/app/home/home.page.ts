@@ -1,4 +1,4 @@
-import { Component } from '@angular/core';
+import { Component, NgZone } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import {
   IonHeader,
@@ -6,51 +6,257 @@ import {
   IonTitle,
   IonContent,
   IonButton,
+  IonAlert,
 } from '@ionic/angular/standalone';
+import { TextToSpeech } from '@capacitor-community/text-to-speech';
 
 @Component({
   selector: 'app-home',
   templateUrl: 'home.page.html',
   styleUrls: ['home.page.scss'],
-  imports: [CommonModule, IonHeader, IonToolbar, IonTitle, IonContent, IonButton],
+  imports: [CommonModule, IonHeader, IonToolbar, IonTitle, IonContent, IonButton, IonAlert],
 })
 export class HomePage {
   isProcessing = false;
   recognizedNote: string | null = null;
-  statusText = 'Pronto para reconhecer uma nota';
+  recognizedCommand: string | null = null;
+  commandResponse: string | null = null;
+  statusText = 'Pronto para testar o microfone';
+  hasMicrophoneAccess = false;
 
   private audioContext?: AudioContext;
   private analyser?: AnalyserNode;
   private stream?: MediaStream;
+  // UI alert for showing errors directly to the user
+  errorAlertOpen = false;
+  errorMessage = '';
+  soundDetectedAlertOpen = false;
+  soundDetectedMessage = '';
+  // Speech command recognition
+  recognitionSupported = false;
+  isListeningForCommand = false;
+  commandAlertOpen = false;
+  commandAlertMessage = '';
+  private speechRecognition?: any;
 
+  constructor(private ngZone: NgZone) {}
   async recognizeNote() {
     if (this.isProcessing) {
       return;
     }
 
     this.recognizedNote = null;
-    this.statusText = 'Aguardando som...';
+    this.statusText = 'Verificando acesso ao microfone...';
     this.isProcessing = true;
+    this.hasMicrophoneAccess = false;
 
     try {
+      console.log('diagnostic: navigator.mediaDevices present=', !!navigator.mediaDevices);
+      await this.requestMicrophonePermission();
       await this.initAudio();
-      this.statusText = 'Escutando... toque a nota agora';
-      await this.wait(1800);
+      this.hasMicrophoneAccess = true;
+      this.statusText = 'Microfone autorizado. Ouvindo som... fale ou faça barulho.';
 
-      const frequency = this.getCurrentFrequency();
-      if (frequency > 0) {
-        this.recognizedNote = this.getNoteName(frequency);
-        this.statusText = `Nota detectada: ${this.recognizedNote}`;
+      const detected = await this.listenForSound(3000);
+      if (detected) {
+        this.soundDetectedMessage = 'Som detectado! O microfone está funcionando.';
       } else {
-        this.statusText = 'Não foi possível detectar uma nota clara. Tente novamente.';
+        this.soundDetectedMessage = 'Nenhum som detectado. Fale ou faça barulho mais alto e tente novamente.';
       }
+      this.soundDetectedAlertOpen = true;
     } catch (error) {
-      this.statusText = 'Erro ao acessar o microfone ou capturar o som.';
-      console.error(error);
+      const e: any = error;
+      let errInfo = '';
+      try {
+        if (e && (e.name || e.message)) {
+          errInfo = `${e.name || ''}: ${e.message || ''}`.trim();
+        } else {
+          errInfo = JSON.stringify(e);
+        }
+      } catch (jsonErr) {
+        errInfo = String(e);
+      }
+      if (e && e.stack) {
+        errInfo += '\n\nStack:\n' + e.stack;
+      }
+
+      this.statusText = `Erro ao acessar o microfone: ${errInfo.split('\n')[0]}`;
+      this.errorMessage = `Detalhes:\n${errInfo}\n\nVerifique permissões do app nas Configurações.`;
+      this.errorAlertOpen = true;
+      console.error('diagnostic: recognizeNote error ->', e);
     } finally {
       this.stopAudio();
       this.isProcessing = false;
     }
+  }
+
+  async startCommandRecognition() {
+    if (this.isListeningForCommand) {
+      return;
+    }
+
+    // Feature detection
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      this.errorMessage = 'Reconhecimento de voz não suportado neste WebView.';
+      this.errorAlertOpen = true;
+      return;
+    }
+
+    this.speechRecognition = new SpeechRecognition();
+    this.speechRecognition.lang = 'pt-BR';
+    this.speechRecognition.interimResults = false;
+    this.speechRecognition.maxAlternatives = 1;
+
+    this.isListeningForCommand = true;
+    this.statusText = 'Escutando comando...';
+
+    this.speechRecognition.onresult = (event: any) => {
+      try {
+        const transcript = (event.results[0][0].transcript || '').toLowerCase().trim();
+        console.log('diagnostic: speech transcript=', transcript);
+        // remove diacritics and punctuation for simpler matching
+        const normalized = transcript
+          .normalize('NFD')
+          .replace(/\p{Diacritic}/gu, '')
+          .replace(/[.,!?]/g, '')
+          .replace(/\s+/g, ' ')
+          .trim();
+        console.log('diagnostic: normalized transcript=', normalized);
+        const commandResult = this.parseVoiceCommand(normalized);
+        this.ngZone.run(() => {
+          this.recognizedCommand = normalized;
+          this.commandResponse = commandResult.response;
+          this.commandAlertMessage = commandResult.response;
+          this.commandAlertOpen = true;
+          this.statusText = commandResult.speak ? 'Comando reconhecido' : 'Comando não reconhecido';
+          if (commandResult.speak) {
+            console.log('diagnostic: command recognized, calling native TTS speak()');
+            this.speak(this.commandAlertMessage).catch((sPeakErr: any) => {
+              console.warn('diagnostic: native speak failed with error', sPeakErr);
+            });
+          } else {
+            console.log('diagnostic: command not spoken, response=', this.commandAlertMessage);
+          }
+        });
+      } catch (e) {
+        console.error('diagnostic: speech onresult error ->', e);
+        this.ngZone.run(() => {
+          this.errorMessage = 'Erro ao processar resultado de voz.';
+          this.errorAlertOpen = true;
+        });
+      }
+    };
+
+    this.speechRecognition.onerror = (ev: any) => {
+      console.warn('diagnostic: speech error', ev);
+      this.ngZone.run(() => {
+        this.errorMessage = `Reconhecimento de voz falhou: ${ev.error || ev.message || ev}`;
+        this.errorAlertOpen = true;
+      });
+    };
+
+    this.speechRecognition.onend = () => {
+      this.ngZone.run(() => {
+        this.isListeningForCommand = false;
+        this.statusText = 'Pronto para testar o microfone';
+      });
+    };
+
+    try {
+      this.speechRecognition.start();
+    } catch (startErr) {
+      console.error('diagnostic: speech start failed ->', startErr);
+      this.ngZone.run(() => {
+        this.errorMessage = `Não foi possível iniciar reconhecimento de voz: ${startErr}`;
+        this.errorAlertOpen = true;
+        this.isListeningForCommand = false;
+        this.statusText = 'Pronto para testar o microfone';
+      });
+    }
+  }
+
+  private async speak(text: string): Promise<void> {
+    console.log('diagnostic: speak() entered with text=', text);
+    try {
+      await TextToSpeech.speak({
+        text,
+        lang: 'pt-BR',
+        rate: 1.0,
+        pitch: 1.0,
+        volume: 1.0,
+        category: 'ambient',
+        queueStrategy: 0,
+      });
+      console.log('diagnostic: TextToSpeech.speak completed');
+    } catch (err) {
+      console.error('diagnostic: TextToSpeech.speak failed', err);
+      throw err;
+    }
+  }
+
+  private parseVoiceCommand(normalized: string): { response: string; speak: boolean } {
+    if (normalized === 'alo' || normalized === 'alô' || normalized === 'ola' || normalized === 'olá') {
+      return { response: 'Olá', speak: true };
+    }
+
+    if (normalized.includes('tudo bem') || normalized.includes('como voce esta') || normalized.includes('como voce vai')) {
+      return { response: 'Estou bem, obrigado. E você?', speak: true };
+    }
+
+    if (normalized.includes('qual e o seu nome') || normalized.includes('como te chama') || normalized.includes('voce se chama')) {
+      return { response: 'Meu nome é Novo Jarvis, seu assistente completo.', speak: true };
+    }
+
+    if (normalized.includes('que horas sao') || normalized.includes('que horas são') || normalized.includes('horas')) {
+      const now = new Date();
+      const hours = now.getHours().toString().padStart(2, '0');
+      const minutes = now.getMinutes().toString().padStart(2, '0');
+      return { response: `Agora são ${hours} horas e ${minutes} minutos.`, speak: true };
+    }
+
+    if (normalized.includes('acende a luz') || normalized.includes('liga a luz') || normalized.includes('liga luz')) {
+      return { response: 'Ligando as luzes.', speak: true };
+    }
+
+    if (normalized.includes('desliga a luz') || normalized.includes('apaga a luz') || normalized.includes('desliga luz')) {
+      return { response: 'Desligando as luzes.', speak: true };
+    }
+
+    if (normalized.includes('teste') || normalized.includes('teste de voz')) {
+      return { response: 'Teste de comando realizado com sucesso.', speak: true };
+    }
+
+    return { response: 'Desculpe, não entendi', speak: true };
+  }
+
+  private async listenForSound(duration = 3000): Promise<boolean> {
+    if (!this.analyser) {
+      return false;
+    }
+
+    const buffer = new Float32Array(this.analyser.fftSize);
+    const threshold = 0.02;
+    const interval = 150;
+    const steps = Math.ceil(duration / interval);
+
+    for (let i = 0; i < steps; i++) {
+      await this.wait(interval);
+      if (!this.analyser) {
+        return false;
+      }
+      this.analyser.getFloatTimeDomainData(buffer);
+      let sum = 0;
+      for (let j = 0; j < buffer.length; j++) {
+        sum += buffer[j] * buffer[j];
+      }
+      const rms = Math.sqrt(sum / buffer.length);
+      console.log('diagnostic: listenForSound rms=', rms);
+      if (rms > threshold) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private async initAudio() {
@@ -58,12 +264,86 @@ export class HomePage {
       return;
     }
 
-    this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    this.audioContext = new AudioContext();
-    const source = this.audioContext.createMediaStreamSource(this.stream);
-    this.analyser = this.audioContext.createAnalyser();
-    this.analyser.fftSize = 2048;
-    source.connect(this.analyser);
+    try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error('navigator.mediaDevices.getUserMedia not available');
+      }
+
+      // Create AudioContext BEFORE getUserMedia for better compatibility
+      if (!this.audioContext) {
+        this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+        console.log('diagnostic: AudioContext created, state=', this.audioContext.state);
+      }
+
+      // Resume AudioContext if suspended (common on WebViews after permission request)
+      if (this.audioContext.state === 'suspended') {
+        console.log('diagnostic: resuming suspended AudioContext...');
+        await this.audioContext.resume();
+        console.log('diagnostic: AudioContext resumed, state=', this.audioContext.state);
+      }
+
+      // try to get devices first for diagnostics
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        console.log('diagnostic: devices before getUserMedia ->', devices);
+      } catch (e) {
+        console.warn('diagnostic: enumerateDevices failed before getUserMedia', e);
+      }
+
+      // Use explicit audio constraints for better microphone access
+      const audioConstraints = {
+        audio: {
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
+        },
+      };
+
+      console.log('diagnostic: calling getUserMedia with constraints ->', audioConstraints);
+      this.stream = await navigator.mediaDevices.getUserMedia(audioConstraints);
+      console.log('diagnostic: getUserMedia success, tracks=', this.stream.getTracks());
+
+      if (!this.stream || this.stream.getTracks().length === 0) {
+        throw new Error('MediaStream obtained but no audio tracks available');
+      }
+
+      try {
+        const source = this.audioContext.createMediaStreamSource(this.stream);
+        console.log('diagnostic: MediaStreamAudioSourceNode created successfully');
+
+        this.analyser = this.audioContext.createAnalyser();
+        this.analyser.fftSize = 2048;
+        source.connect(this.analyser);
+        console.log('diagnostic: analyser connected successfully');
+      } catch (audioErr) {
+        console.error('diagnostic: error creating/connecting audio nodes ->', audioErr);
+        throw new Error(`Audio node error: ${audioErr}`);
+      }
+    } catch (err) {
+      console.error('diagnostic: initAudio failed ->', err);
+      this.stopAudio();
+      throw err;
+    }
+  }
+
+  private async requestMicrophonePermission(): Promise<void> {
+    if (navigator.permissions && navigator.permissions.query) {
+      try {
+        // @ts-ignore
+        const p = await navigator.permissions.query({ name: 'microphone' });
+        if (p && p.state === 'denied') {
+          throw new Error('Permissão de microfone negada');
+        }
+      } catch (e) {
+        console.warn('navigator.permissions query failed', e);
+      }
+    }
+
+    if (navigator.mediaDevices) {
+      return;
+    }
+
+    throw new Error('API de microfone não suportada neste dispositivo');
   }
 
   private getCurrentFrequency(): number {

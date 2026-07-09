@@ -32,6 +32,18 @@
  * https://ionicframework.com/docs/theming/dark-mode
  */
 
+.global-app-version {
+	position: fixed;
+	bottom: 6px;
+	left: 0;
+	right: 0;
+	text-align: center;
+	color: rgba(255,255,255,0.75);
+	font-size: 0.85rem;
+	pointer-events: none;
+	z-index: 1000;
+}
+
 /* @import "@ionic/angular/css/palettes/dark.always.css"; */
 /* @import "@ionic/angular/css/palettes/dark.class.css"; */
 @import '@ionic/angular/css/palettes/dark.system.css';

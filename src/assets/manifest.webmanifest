@@ -1,7 +1,7 @@
 {
-  "name": "Play it Right",
-  "short_name": "Play it Right",
-  "description": "Identifique notas musicais tocadas com seu instrumento ou som.",
+  "name": "NOVO JARVIS",
+  "short_name": "NOVO JARVIS",
+  "description": "Seu assistente completo para reconhecimento de som e comandos.",
   "start_url": ".",
   "display": "standalone",
   "background_color": "#12192d",

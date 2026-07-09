@@ -1,24 +1,32 @@
 <ion-header [translucent]="true">
-  <ion-toolbar>
-    <ion-title>Play it Right</ion-title>
-  </ion-toolbar>
+    <ion-toolbar>
+      <ion-title>NOVO JARVIS</ion-title>
+    </ion-toolbar>
 </ion-header>
 
 <ion-content [fullscreen]="true">
-  <ion-header collapse="condense">
+    <ion-header collapse="condense">
     <ion-toolbar>
-      <ion-title size="large">Play it Right</ion-title>
+      <ion-title size="large">NOVO JARVIS</ion-title>
     </ion-toolbar>
   </ion-header>
 
   <div id="welcome-card">
     <div class="brand">
-      <span class="brand-title">Play it Right</span>
-      <span class="brand-tag">Reconheça a nota e toque no tom certo</span>
+      <img src="assets/icon/favicon.svg" alt="NOVO JARVIS" class="app-icon" />
+      <span class="brand-title">NOVO JARVIS</span>
+      <span class="brand-tag">Seu assistente completo</span>
     </div>
 
+    <ion-alert [isOpen]="errorAlertOpen" header="Erro" [message]="errorMessage" buttons="OK" (didDismiss)="errorAlertOpen = false">
+    </ion-alert>
+    <ion-alert [isOpen]="commandAlertOpen" header="Comando de Voz" [message]="commandAlertMessage" buttons="OK" (didDismiss)="commandAlertOpen = false">
+    </ion-alert>
+    <ion-alert [isOpen]="soundDetectedAlertOpen" header="Teste do Microfone" [message]="soundDetectedMessage" buttons="OK" (didDismiss)="soundDetectedAlertOpen = false">
+    </ion-alert>
+
     <div class="hero-copy">
-      <p>Toque uma nota no seu instrumento ou em um som e deixe o app identificar a nota musical correta.</p>
+      <p>Toque ou fale para testar se o microfone está funcionando. O app vai avisar quando detectar som.</p>
     </div>
 
     <div class="status-row">
@@ -26,8 +34,17 @@
       <span *ngIf="recognizedNote" class="note-chip">{{ recognizedNote }}</span>
     </div>
 
+    <div class="status-row" *ngIf="recognizedCommand || commandResponse">
+      <span *ngIf="recognizedCommand" class="note-chip">Comando: {{ recognizedCommand }}</span>
+      <span *ngIf="commandResponse" class="note-chip">Resposta: {{ commandResponse }}</span>
+    </div>
+
     <ion-button expand="full" fill="solid" size="large" (click)="recognizeNote()" [disabled]="isProcessing">
-      {{ isProcessing ? 'Escutando…' : 'Reconhecer nota' }}
+      {{ isProcessing ? 'Processando…' : 'Testar microfone' }}
+    </ion-button>
+
+    <ion-button expand="full" fill="outline" size="large" (click)="startCommandRecognition()" [disabled]="isListeningForCommand">
+      {{ isListeningForCommand ? 'Ouvindo…' : 'Reconhecer comando' }}
     </ion-button>
 
     <p class="hint-text">Aproxime o microfone e mantenha o som claro enquanto o app escuta.</p>
