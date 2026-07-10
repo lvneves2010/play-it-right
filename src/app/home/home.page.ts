@@ -9,6 +9,7 @@ import {
   IonAlert,
 } from '@ionic/angular/standalone';
 import { TextToSpeech } from '@capacitor-community/text-to-speech';
+import { environment } from '../../environments/environment';
 
 @Component({
   selector: 'app-home',
@@ -111,7 +112,7 @@ export class HomePage {
     this.isListeningForCommand = true;
     this.statusText = 'Escutando comando...';
 
-    this.speechRecognition.onresult = (event: any) => {
+    this.speechRecognition.onresult = async (event: any) => {
       try {
         const transcript = (event.results[0][0].transcript || '').toLowerCase().trim();
         console.log('diagnostic: speech transcript=', transcript);
@@ -123,6 +124,47 @@ export class HomePage {
           .replace(/\s+/g, ' ')
           .trim();
         console.log('diagnostic: normalized transcript=', normalized);
+
+        if (normalized.startsWith('pergunta')) {
+          const question = this.extractQuestion(normalized);
+          if (!question) {
+            this.ngZone.run(() => {
+              this.commandAlertMessage = 'Pergunta vazia. Por favor, fale algo após "pergunta".';
+              this.commandAlertOpen = true;
+              this.statusText = 'Pergunta inválida';
+            });
+            return;
+          }
+
+          this.ngZone.run(() => {
+            this.recognizedCommand = normalized;
+            this.commandResponse = 'Consultando LLM...';
+            this.commandAlertMessage = 'Consultando LLM...';
+            this.commandAlertOpen = true;
+            this.statusText = 'Enviando pergunta para LLM...';
+          });
+
+          try {
+            const answer = await this.queryLLM(question);
+            this.ngZone.run(() => {
+              this.commandResponse = answer;
+              this.commandAlertMessage = answer;
+              this.statusText = 'Resposta recebida';
+            });
+            await this.speak(answer);
+          } catch (llmError) {
+            console.error('diagnostic: queryLLM failed ->', llmError);
+            this.ngZone.run(() => {
+              this.commandAlertMessage = 'Não foi possível obter resposta da LLM.';
+              this.commandResponse = String(llmError || 'Erro desconhecido');
+              this.commandAlertOpen = true;
+              this.statusText = 'Erro na LLM';
+            });
+          }
+
+          return;
+        }
+
         const commandResult = this.parseVoiceCommand(normalized);
         this.ngZone.run(() => {
           this.recognizedCommand = normalized;
@@ -229,6 +271,164 @@ export class HomePage {
 
     return { response: 'Desculpe, não entendi', speak: true };
   }
+
+  private extractQuestion(normalized: string): string {
+    return normalized.replace(/^pergunta[:\s]*/i, '').trim();
+  }
+
+  private async queryLLM(question: string): Promise<string> {
+  const apiUrl = environment.llmApiUrl;
+  const apiKey = environment.llmApiKey;
+
+  if (!apiUrl || !apiKey) {
+    throw new Error('LLM API não está configurada. Atualize src/environments/environment.ts.');
+  }
+
+  const requestBody = {
+    contents: [
+      {
+        parts: [
+          {
+            text: `Responda em português de forma clara e objetiva. Pergunta: ${question}`,
+          },
+        ],
+      },
+    ],
+  }
+
+  const urlWithKey = `${apiUrl}?key=${apiKey}`;
+  console.log('diagnostic: queryLLM - enviando para Gemini:', apiUrl);
+  console.log('diagnostic: queryLLM - pergunta:', question);
+
+  const maxTentativas = 5;
+
+  for (let tentativa = 1; tentativa <= maxTentativas; tentativa++) {
+    try {
+    const response = await fetch(urlWithKey, {
+    method: 'POST',
+    headers: {
+    'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(requestBody),
+    });
+
+    console.log(
+    `diagnostic: queryLLM - tentativa ${tentativa}/${maxTentativas} - status:`,
+    response.status,
+    response.statusText
+    );
+
+    const data = await response.json();
+    console.log('diagnostic: queryLLM - resposta completa:', JSON.stringify(data));
+
+    if (!response.ok) {
+    const errorMessage =
+    data?.error?.message ||
+    data?.error?.errors?.[0]?.message ||
+    data?.message ||
+    response.statusText;
+
+    console.error('diagnostic: queryLLM - erro HTTP:', errorMessage);
+
+    if (
+    (response.status === 429 || response.status === 503) &&
+    tentativa < maxTentativas
+    ) {
+    console.log(
+    `diagnostic: aguardando nova tentativa (${tentativa}/${maxTentativas})`
+    );
+
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    continue;
+    }
+
+    throw new Error(`Erro LLM: ${errorMessage}`);
+    }
+
+    const answer =
+    data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ||
+    'Não foi possível obter uma resposta da LLM.';
+
+    console.log('diagnostic: queryLLM - resposta final:', answer);
+    return answer;
+    } catch (error) {
+      console.error('diagnostic: queryLLM - erro fetch:', error);
+
+      if (tentativa >= maxTentativas) {
+        throw error;
+      }
+
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+  }
+
+ throw new Error('Falha ao consultar a LLM após 5 tentativas.');
+}
+  
+
+  // private async queryLLM(question: string): Promise<string> {
+  //   const apiUrl = environment.llmApiUrl;
+  //   const apiKey = environment.llmApiKey;
+
+  //   if (!apiUrl || !apiKey) {
+  //     throw new Error('LLM API não está configurada. Atualize src/environments/environment.ts.');
+  //   }
+
+  //   const requestBody = {
+  //     contents: [
+  //       {
+  //         parts: [
+  //           {
+  //             text: `Responda em português de forma clara e objetiva. Pergunta: ${question}`,
+  //           },
+  //         ],
+  //       },
+  //     ],
+  //     generationConfig: {
+  //       maxOutputTokens: 250,
+  //       temperature: 0.7,
+  //     },
+  //   };
+
+  //   const urlWithKey = `${apiUrl}?key=${apiKey}`;
+  //   console.log('diagnostic: queryLLM - enviando para Gemini:', apiUrl);
+  //   console.log('diagnostic: queryLLM - pergunta:', question);
+
+  //   try {
+  //     const response = await fetch(urlWithKey, {
+  //       method: 'POST',
+  //       headers: {
+  //         'Content-Type': 'application/json',
+  //       },
+  //       body: JSON.stringify(requestBody),
+  //     });
+
+  //     console.log('diagnostic: queryLLM - status:', response.status, response.statusText);
+
+  //     const data = await response.json();
+  //     console.log('diagnostic: queryLLM - resposta completa:', JSON.stringify(data));
+
+  //     if (!response.ok) {
+  //       const errorMessage = 
+  //         data?.error?.message || 
+  //         data?.error?.errors?.[0]?.message ||
+  //         data?.message || 
+  //         response.statusText;
+  //       console.error('diagnostic: queryLLM - erro HTTP:', errorMessage);
+  //       throw new Error(`Erro LLM: ${errorMessage}`);
+  //     }
+
+  //     const answer = 
+  //       data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ||
+  //       'Não foi possível obter uma resposta da LLM.';
+      
+  //     console.log('diagnostic: queryLLM - resposta final:', answer);
+  //     return answer;
+  //   } catch (error) {
+  //     console.error('diagnostic: queryLLM - erro fetch:', error);
+  //     throw error;
+  //   }
+  // }
 
   private async listenForSound(duration = 3000): Promise<boolean> {
     if (!this.analyser) {
