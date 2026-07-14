@@ -303,66 +303,77 @@ export class HomePage {
   const maxTentativas = 5;
 
   for (let tentativa = 1; tentativa <= maxTentativas; tentativa++) {
+    let response: Response;
     try {
-    const response = await fetch(urlWithKey, {
-    method: 'POST',
-    headers: {
-    'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(requestBody),
-    });
+      response = await fetch(urlWithKey, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestBody),
+      });
+    } catch (networkError) {
+      // Network-level failures are transient: retry while attempts remain,
+      // otherwise propagate the original error to the caller.
+      console.error('diagnostic: queryLLM - erro de rede:', networkError);
+      if (tentativa >= maxTentativas) {
+        throw networkError;
+      }
+      console.log(`diagnostic: aguardando nova tentativa (${tentativa}/${maxTentativas})`);
+      await this.wait(2000);
+      continue;
+    }
 
     console.log(
-    `diagnostic: queryLLM - tentativa ${tentativa}/${maxTentativas} - status:`,
-    response.status,
-    response.statusText
+      `diagnostic: queryLLM - tentativa ${tentativa}/${maxTentativas} - status:`,
+      response.status,
+      response.statusText
     );
 
-    const data = await response.json();
+    let data: any;
+    try {
+      data = await response.json();
+    } catch (parseError) {
+      console.error('diagnostic: queryLLM - falha ao interpretar resposta JSON:', parseError);
+      if (tentativa >= maxTentativas) {
+        throw new Error('Resposta inválida da LLM (JSON malformado).');
+      }
+      await this.wait(2000);
+      continue;
+    }
     console.log('diagnostic: queryLLM - resposta completa:', JSON.stringify(data));
 
     if (!response.ok) {
-    const errorMessage =
-    data?.error?.message ||
-    data?.error?.errors?.[0]?.message ||
-    data?.message ||
-    response.statusText;
+      const errorMessage =
+        data?.error?.message ||
+        data?.error?.errors?.[0]?.message ||
+        data?.message ||
+        response.statusText;
 
-    console.error('diagnostic: queryLLM - erro HTTP:', errorMessage);
+      console.error('diagnostic: queryLLM - erro HTTP:', errorMessage);
 
-    if (
-    (response.status === 429 || response.status === 503) &&
-    tentativa < maxTentativas
-    ) {
-    console.log(
-    `diagnostic: aguardando nova tentativa (${tentativa}/${maxTentativas})`
-    );
+      // Only rate-limit / unavailable responses are worth retrying. Any other
+      // HTTP error (bad request, auth failure, ...) is not transient and must
+      // be surfaced immediately instead of being retried and delayed.
+      const isRetryable = response.status === 429 || response.status === 503;
+      if (isRetryable && tentativa < maxTentativas) {
+        console.log(`diagnostic: aguardando nova tentativa (${tentativa}/${maxTentativas})`);
+        await this.wait(2000);
+        continue;
+      }
 
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    continue;
-    }
-
-    throw new Error(`Erro LLM: ${errorMessage}`);
+      throw new Error(`Erro LLM: ${errorMessage}`);
     }
 
     const answer =
-    data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ||
-    'Não foi possível obter uma resposta da LLM.';
+      data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ||
+      'Não foi possível obter uma resposta da LLM.';
 
     console.log('diagnostic: queryLLM - resposta final:', answer);
     return answer;
-    } catch (error) {
-      console.error('diagnostic: queryLLM - erro fetch:', error);
-
-      if (tentativa >= maxTentativas) {
-        throw error;
-      }
-
-      await new Promise(resolve => setTimeout(resolve, 2000));
-    }
   }
 
- throw new Error('Falha ao consultar a LLM após 5 tentativas.');
+  throw new Error(`Falha ao consultar a LLM após ${maxTentativas} tentativas.`);
 }
   
 
@@ -528,14 +539,19 @@ export class HomePage {
 
   private async requestMicrophonePermission(): Promise<void> {
     if (navigator.permissions && navigator.permissions.query) {
+      let permissionStatus: PermissionStatus | undefined;
       try {
         // @ts-ignore
-        const p = await navigator.permissions.query({ name: 'microphone' });
-        if (p && p.state === 'denied') {
-          throw new Error('Permissão de microfone negada');
-        }
+        permissionStatus = await navigator.permissions.query({ name: 'microphone' });
       } catch (e) {
+        // Querying the Permissions API can legitimately fail (e.g. an
+        // unsupported descriptor in some WebViews). Tolerate that and fall
+        // back to getUserMedia, but do NOT swallow a genuine "denied" state.
         console.warn('navigator.permissions query failed', e);
+      }
+
+      if (permissionStatus && permissionStatus.state === 'denied') {
+        throw new Error('Permissão de microfone negada');
       }
     }
 
@@ -615,7 +631,11 @@ export class HomePage {
     }
 
     if (this.audioContext) {
-      this.audioContext.close();
+      // close() is async and can reject; handle it so a teardown failure
+      // never turns into an unhandled promise rejection.
+      this.audioContext.close().catch(err => {
+        console.warn('diagnostic: failed to close AudioContext', err);
+      });
       this.audioContext = undefined;
     }
 
