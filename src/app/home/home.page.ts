@@ -257,12 +257,12 @@ export class HomePage {
       return { response: `Agora são ${hours} horas e ${minutes} minutos.`, speak: true };
     }
 
-    if (normalized.includes('acende a luz') || normalized.includes('liga a luz') || normalized.includes('liga luz')) {
-      return { response: 'Ligando as luzes.', speak: true };
-    }
-
     if (normalized.includes('desliga a luz') || normalized.includes('apaga a luz') || normalized.includes('desliga luz')) {
       return { response: 'Desligando as luzes.', speak: true };
+    }
+
+    if (normalized.includes('acende a luz') || normalized.includes('liga a luz') || normalized.includes('liga luz')) {
+      return { response: 'Ligando as luzes.', speak: true };
     }
 
     if (normalized.includes('teste') || normalized.includes('teste de voz')) {
