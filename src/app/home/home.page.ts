@@ -1,4 +1,4 @@
-import { Component, NgZone } from '@angular/core';
+import { Component, NgZone, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import {
   IonHeader,
@@ -40,7 +40,7 @@ export class HomePage {
   commandAlertMessage = '';
   private speechRecognition?: any;
 
-  constructor(private ngZone: NgZone) {}
+  private readonly ngZone = inject(NgZone);
   async recognizeNote() {
     if (this.isProcessing) {
       return;
