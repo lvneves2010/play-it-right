@@ -1,4 +1,4 @@
-import { Component, NgZone } from '@angular/core';
+import { Component, inject, NgZone } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import {
   IonHeader,
@@ -10,6 +10,35 @@ import {
 } from '@ionic/angular/standalone';
 import { TextToSpeech } from '@capacitor-community/text-to-speech';
 import { environment } from '../../environments/environment';
+import { wait } from '../shared/async.utils';
+import {
+  calculateRootMeanSquare,
+  includesAnyPhrase,
+  normalizeSpeechText,
+} from '../shared/voice.utils';
+
+const STATIC_VOICE_COMMANDS = [
+  {
+    phrases: ['tudo bem', 'como voce esta', 'como voce vai'],
+    response: 'Estou bem, obrigado. E você?',
+  },
+  {
+    phrases: ['qual e o seu nome', 'como te chama', 'voce se chama'],
+    response: 'Meu nome é Novo Jarvis, seu assistente completo.',
+  },
+  {
+    phrases: ['acende a luz', 'liga a luz', 'liga luz'],
+    response: 'Ligando as luzes.',
+  },
+  {
+    phrases: ['desliga a luz', 'apaga a luz', 'desliga luz'],
+    response: 'Desligando as luzes.',
+  },
+  {
+    phrases: ['teste'],
+    response: 'Teste de comando realizado com sucesso.',
+  },
+] as const;
 
 @Component({
   selector: 'app-home',
@@ -18,6 +47,8 @@ import { environment } from '../../environments/environment';
   imports: [CommonModule, IonHeader, IonToolbar, IonTitle, IonContent, IonButton, IonAlert],
 })
 export class HomePage {
+  private readonly ngZone = inject(NgZone);
+
   isProcessing = false;
   recognizedNote: string | null = null;
   recognizedCommand: string | null = null;
@@ -40,7 +71,6 @@ export class HomePage {
   commandAlertMessage = '';
   private speechRecognition?: any;
 
-  constructor(private ngZone: NgZone) {}
   async recognizeNote() {
     if (this.isProcessing) {
       return;
@@ -114,15 +144,9 @@ export class HomePage {
 
     this.speechRecognition.onresult = async (event: any) => {
       try {
-        const transcript = (event.results[0][0].transcript || '').toLowerCase().trim();
+        const transcript = event.results[0][0].transcript || '';
         console.log('diagnostic: speech transcript=', transcript);
-        // remove diacritics and punctuation for simpler matching
-        const normalized = transcript
-          .normalize('NFD')
-          .replace(/\p{Diacritic}/gu, '')
-          .replace(/[.,!?]/g, '')
-          .replace(/\s+/g, ' ')
-          .trim();
+        const normalized = normalizeSpeechText(transcript);
         console.log('diagnostic: normalized transcript=', normalized);
 
         if (normalized.startsWith('pergunta')) {
@@ -238,35 +262,22 @@ export class HomePage {
   }
 
   private parseVoiceCommand(normalized: string): { response: string; speak: boolean } {
-    if (normalized === 'alo' || normalized === 'alô' || normalized === 'ola' || normalized === 'olá') {
+    if (['alo', 'ola'].includes(normalized)) {
       return { response: 'Olá', speak: true };
     }
 
-    if (normalized.includes('tudo bem') || normalized.includes('como voce esta') || normalized.includes('como voce vai')) {
-      return { response: 'Estou bem, obrigado. E você?', speak: true };
-    }
-
-    if (normalized.includes('qual e o seu nome') || normalized.includes('como te chama') || normalized.includes('voce se chama')) {
-      return { response: 'Meu nome é Novo Jarvis, seu assistente completo.', speak: true };
-    }
-
-    if (normalized.includes('que horas sao') || normalized.includes('que horas são') || normalized.includes('horas')) {
+    if (normalized.includes('horas')) {
       const now = new Date();
       const hours = now.getHours().toString().padStart(2, '0');
       const minutes = now.getMinutes().toString().padStart(2, '0');
       return { response: `Agora são ${hours} horas e ${minutes} minutos.`, speak: true };
     }
 
-    if (normalized.includes('acende a luz') || normalized.includes('liga a luz') || normalized.includes('liga luz')) {
-      return { response: 'Ligando as luzes.', speak: true };
-    }
-
-    if (normalized.includes('desliga a luz') || normalized.includes('apaga a luz') || normalized.includes('desliga luz')) {
-      return { response: 'Desligando as luzes.', speak: true };
-    }
-
-    if (normalized.includes('teste') || normalized.includes('teste de voz')) {
-      return { response: 'Teste de comando realizado com sucesso.', speak: true };
+    const command = STATIC_VOICE_COMMANDS.find(({ phrases }) =>
+      includesAnyPhrase(normalized, phrases)
+    );
+    if (command) {
+      return { response: command.response, speak: true };
     }
 
     return { response: 'Desculpe, não entendi', speak: true };
@@ -277,158 +288,87 @@ export class HomePage {
   }
 
   private async queryLLM(question: string): Promise<string> {
-  const apiUrl = environment.llmApiUrl;
-  const apiKey = environment.llmApiKey;
+    const apiUrl = environment.llmApiUrl;
+    const apiKey = environment.llmApiKey;
 
-  if (!apiUrl || !apiKey) {
-    throw new Error('LLM API não está configurada. Atualize src/environments/environment.ts.');
-  }
+    if (!apiUrl || !apiKey) {
+      throw new Error('LLM API não está configurada. Atualize src/environments/environment.ts.');
+    }
 
-  const requestBody = {
-    contents: [
-      {
-        parts: [
-          {
-            text: `Responda em português de forma clara e objetiva. Pergunta: ${question}`,
+    const requestBody = {
+      contents: [
+        {
+          parts: [
+            {
+              text: `Responda em português de forma clara e objetiva. Pergunta: ${question}`,
+            },
+          ],
+        },
+      ],
+    };
+
+    const urlWithKey = `${apiUrl}?key=${apiKey}`;
+    console.log('diagnostic: queryLLM - enviando para Gemini:', apiUrl);
+    console.log('diagnostic: queryLLM - pergunta:', question);
+
+    const maxTentativas = 5;
+
+    for (let tentativa = 1; tentativa <= maxTentativas; tentativa++) {
+      try {
+        const response = await fetch(urlWithKey, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
           },
-        ],
-      },
-    ],
-  }
+          body: JSON.stringify(requestBody),
+        });
 
-  const urlWithKey = `${apiUrl}?key=${apiKey}`;
-  console.log('diagnostic: queryLLM - enviando para Gemini:', apiUrl);
-  console.log('diagnostic: queryLLM - pergunta:', question);
+        console.log(
+          `diagnostic: queryLLM - tentativa ${tentativa}/${maxTentativas} - status:`,
+          response.status,
+          response.statusText
+        );
 
-  const maxTentativas = 5;
+        const data = await response.json();
+        console.log('diagnostic: queryLLM - resposta completa:', JSON.stringify(data));
 
-  for (let tentativa = 1; tentativa <= maxTentativas; tentativa++) {
-    try {
-    const response = await fetch(urlWithKey, {
-    method: 'POST',
-    headers: {
-    'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(requestBody),
-    });
+        if (!response.ok) {
+          const errorMessage =
+            data?.error?.message ||
+            data?.error?.errors?.[0]?.message ||
+            data?.message ||
+            response.statusText;
 
-    console.log(
-    `diagnostic: queryLLM - tentativa ${tentativa}/${maxTentativas} - status:`,
-    response.status,
-    response.statusText
-    );
+          console.error('diagnostic: queryLLM - erro HTTP:', errorMessage);
 
-    const data = await response.json();
-    console.log('diagnostic: queryLLM - resposta completa:', JSON.stringify(data));
+          if ((response.status === 429 || response.status === 503) && tentativa < maxTentativas) {
+            console.log(`diagnostic: aguardando nova tentativa (${tentativa}/${maxTentativas})`);
+            await wait(2000);
+            continue;
+          }
 
-    if (!response.ok) {
-    const errorMessage =
-    data?.error?.message ||
-    data?.error?.errors?.[0]?.message ||
-    data?.message ||
-    response.statusText;
+          throw new Error(`Erro LLM: ${errorMessage}`);
+        }
 
-    console.error('diagnostic: queryLLM - erro HTTP:', errorMessage);
+        const answer =
+          data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ||
+          'Não foi possível obter uma resposta da LLM.';
 
-    if (
-    (response.status === 429 || response.status === 503) &&
-    tentativa < maxTentativas
-    ) {
-    console.log(
-    `diagnostic: aguardando nova tentativa (${tentativa}/${maxTentativas})`
-    );
+        console.log('diagnostic: queryLLM - resposta final:', answer);
+        return answer;
+      } catch (error) {
+        console.error('diagnostic: queryLLM - erro fetch:', error);
 
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    continue;
-    }
+        if (tentativa >= maxTentativas) {
+          throw error;
+        }
 
-    throw new Error(`Erro LLM: ${errorMessage}`);
-    }
-
-    const answer =
-    data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ||
-    'Não foi possível obter uma resposta da LLM.';
-
-    console.log('diagnostic: queryLLM - resposta final:', answer);
-    return answer;
-    } catch (error) {
-      console.error('diagnostic: queryLLM - erro fetch:', error);
-
-      if (tentativa >= maxTentativas) {
-        throw error;
+        await wait(2000);
       }
-
-      await new Promise(resolve => setTimeout(resolve, 2000));
     }
+
+    throw new Error('Falha ao consultar a LLM após 5 tentativas.');
   }
-
- throw new Error('Falha ao consultar a LLM após 5 tentativas.');
-}
-  
-
-  // private async queryLLM(question: string): Promise<string> {
-  //   const apiUrl = environment.llmApiUrl;
-  //   const apiKey = environment.llmApiKey;
-
-  //   if (!apiUrl || !apiKey) {
-  //     throw new Error('LLM API não está configurada. Atualize src/environments/environment.ts.');
-  //   }
-
-  //   const requestBody = {
-  //     contents: [
-  //       {
-  //         parts: [
-  //           {
-  //             text: `Responda em português de forma clara e objetiva. Pergunta: ${question}`,
-  //           },
-  //         ],
-  //       },
-  //     ],
-  //     generationConfig: {
-  //       maxOutputTokens: 250,
-  //       temperature: 0.7,
-  //     },
-  //   };
-
-  //   const urlWithKey = `${apiUrl}?key=${apiKey}`;
-  //   console.log('diagnostic: queryLLM - enviando para Gemini:', apiUrl);
-  //   console.log('diagnostic: queryLLM - pergunta:', question);
-
-  //   try {
-  //     const response = await fetch(urlWithKey, {
-  //       method: 'POST',
-  //       headers: {
-  //         'Content-Type': 'application/json',
-  //       },
-  //       body: JSON.stringify(requestBody),
-  //     });
-
-  //     console.log('diagnostic: queryLLM - status:', response.status, response.statusText);
-
-  //     const data = await response.json();
-  //     console.log('diagnostic: queryLLM - resposta completa:', JSON.stringify(data));
-
-  //     if (!response.ok) {
-  //       const errorMessage = 
-  //         data?.error?.message || 
-  //         data?.error?.errors?.[0]?.message ||
-  //         data?.message || 
-  //         response.statusText;
-  //       console.error('diagnostic: queryLLM - erro HTTP:', errorMessage);
-  //       throw new Error(`Erro LLM: ${errorMessage}`);
-  //     }
-
-  //     const answer = 
-  //       data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ||
-  //       'Não foi possível obter uma resposta da LLM.';
-      
-  //     console.log('diagnostic: queryLLM - resposta final:', answer);
-  //     return answer;
-  //   } catch (error) {
-  //     console.error('diagnostic: queryLLM - erro fetch:', error);
-  //     throw error;
-  //   }
-  // }
 
   private async listenForSound(duration = 3000): Promise<boolean> {
     if (!this.analyser) {
@@ -441,16 +381,12 @@ export class HomePage {
     const steps = Math.ceil(duration / interval);
 
     for (let i = 0; i < steps; i++) {
-      await this.wait(interval);
+      await wait(interval);
       if (!this.analyser) {
         return false;
       }
       this.analyser.getFloatTimeDomainData(buffer);
-      let sum = 0;
-      for (let j = 0; j < buffer.length; j++) {
-        sum += buffer[j] * buffer[j];
-      }
-      const rms = Math.sqrt(sum / buffer.length);
+      const rms = calculateRootMeanSquare(buffer);
       console.log('diagnostic: listenForSound rms=', rms);
       if (rms > threshold) {
         return true;
@@ -561,13 +497,7 @@ export class HomePage {
     let bestOffset = -1;
     let bestCorrelation = 0;
     let lastCorrelation = 1;
-    let rms = 0;
-
-    for (let i = 0; i < size; i++) {
-      const val = buf[i];
-      rms += val * val;
-    }
-    rms = Math.sqrt(rms / size);
+    const rms = calculateRootMeanSquare(buf);
     if (rms < 0.01) {
       return 0;
     }
@@ -602,10 +532,6 @@ export class HomePage {
     const octave = Math.floor(rounded / 12) - 1;
     const note = noteStrings[(rounded + 120) % 12];
     return `${note}${octave}`;
-  }
-
-  private wait(ms: number) {
-    return new Promise(resolve => setTimeout(resolve, ms));
   }
 
   private stopAudio() {
