@@ -1,0 +1,8 @@
+// Copie este arquivo para "environment.ts" (mesma pasta) e preencha com sua chave real.
+// "environment.ts" está no .gitignore e nunca deve ser commitado.
+
+export const environment = {
+  production: false,
+  llmApiUrl: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent',
+  llmApiKey: 'YOUR_GEMINI_API_KEY_HERE',
+};

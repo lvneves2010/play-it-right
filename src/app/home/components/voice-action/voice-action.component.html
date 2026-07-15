@@ -1,0 +1,24 @@
+<div class="action-area">
+  <button
+    *ngIf="isSpeaking"
+    type="button"
+    class="stop-speaking-btn"
+    (click)="stop.emit()"
+    aria-label="Parar leitura">
+    <img src="assets/icon/stop-speaking.svg" alt="" class="stop-speaking-icon" />
+    <span>Parar leitura</span>
+  </button>
+
+  <button
+    *ngIf="!isSpeaking"
+    type="button"
+    class="speak-fab"
+    (click)="start.emit()"
+    [disabled]="isListeningForCommand"
+    aria-label="Falar com o Jarvis">
+    <ion-icon name="mic" class="speak-fab-icon"></ion-icon>
+    <span class="speak-fab-label">
+      {{ isListeningForCommand ? 'Ouvindo…' : 'Falar com o Jarvis' }}
+    </span>
+  </button>
+</div>

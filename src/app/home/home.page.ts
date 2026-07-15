@@ -5,49 +5,78 @@ import {
   IonToolbar,
   IonTitle,
   IonContent,
-  IonButton,
   IonAlert,
+  IonMenuButton,
+  IonButtons,
 } from '@ionic/angular/standalone';
+import { addIcons } from 'ionicons';
+import { mic, save } from 'ionicons/icons';
 import { TextToSpeech } from '@capacitor-community/text-to-speech';
+import { Directory, Encoding, Filesystem } from '@capacitor/filesystem';
 import { environment } from '../../environments/environment';
+import { BrandHeaderComponent } from './components/brand-header/brand-header.component';
+import { StatusPanelComponent } from './components/status-panel/status-panel.component';
+import { SaveBannerComponent } from './components/save-banner/save-banner.component';
+import { VoiceActionComponent } from './components/voice-action/voice-action.component';
+import { SettingsMenuComponent } from './components/settings-menu/settings-menu.component';
+import { VoiceCommandsService } from '../services/voice-commands.service';
 
 @Component({
   selector: 'app-home',
   templateUrl: 'home.page.html',
   styleUrls: ['home.page.scss'],
-  imports: [CommonModule, IonHeader, IonToolbar, IonTitle, IonContent, IonButton, IonAlert],
+  imports: [
+    CommonModule,
+    IonHeader,
+    IonToolbar,
+    IonTitle,
+    IonContent,
+    IonAlert,
+    IonMenuButton,
+    IonButtons,
+    BrandHeaderComponent,
+    StatusPanelComponent,
+    SaveBannerComponent,
+    VoiceActionComponent,
+    SettingsMenuComponent,
+  ],
 })
 export class HomePage {
   isProcessing = false;
   recognizedNote: string | null = null;
   recognizedCommand: string | null = null;
   commandResponse: string | null = null;
-  statusText = 'Pronto para testar o microfone';
+  statusText = 'Pronto. Toque para falar com o Jarvis.';
   hasMicrophoneAccess = false;
+  micTestStatus = '';
+  isSpeaking = false;
+  awaitingSaveCommand = false;
+  isListeningForSave = false;
 
   private audioContext?: AudioContext;
   private analyser?: AnalyserNode;
   private stream?: MediaStream;
-  // UI alert for showing errors directly to the user
   errorAlertOpen = false;
   errorMessage = '';
-  soundDetectedAlertOpen = false;
-  soundDetectedMessage = '';
-  // Speech command recognition
-  recognitionSupported = false;
   isListeningForCommand = false;
-  commandAlertOpen = false;
-  commandAlertMessage = '';
   private speechRecognition?: any;
+  private followUpRecognition?: any;
+  private speechAborted = false;
+  private saveListenActive = false;
+  private readonly saveListenWindowMs = 20000;
+  lastResponseText: string | null = null;
 
-  constructor(private ngZone: NgZone) {}
+  constructor(private ngZone: NgZone, private voiceCommands: VoiceCommandsService) {
+    addIcons({ mic, save });
+  }
+
   async recognizeNote() {
     if (this.isProcessing) {
       return;
     }
 
     this.recognizedNote = null;
-    this.statusText = 'Verificando acesso ao microfone...';
+    this.micTestStatus = 'Verificando acesso ao microfone...';
     this.isProcessing = true;
     this.hasMicrophoneAccess = false;
 
@@ -56,15 +85,14 @@ export class HomePage {
       await this.requestMicrophonePermission();
       await this.initAudio();
       this.hasMicrophoneAccess = true;
-      this.statusText = 'Microfone autorizado. Ouvindo som... fale ou faça barulho.';
+      this.micTestStatus = 'Microfone autorizado. Ouvindo som... fale ou faça barulho.';
 
       const detected = await this.listenForSound(3000);
       if (detected) {
-        this.soundDetectedMessage = 'Som detectado! O microfone está funcionando.';
+        this.micTestStatus = 'Som detectado! O microfone está funcionando.';
       } else {
-        this.soundDetectedMessage = 'Nenhum som detectado. Fale ou faça barulho mais alto e tente novamente.';
+        this.micTestStatus = 'Nenhum som detectado. Fale ou faça barulho mais alto e tente novamente.';
       }
-      this.soundDetectedAlertOpen = true;
     } catch (error) {
       const e: any = error;
       let errInfo = '';
@@ -81,7 +109,7 @@ export class HomePage {
         errInfo += '\n\nStack:\n' + e.stack;
       }
 
-      this.statusText = `Erro ao acessar o microfone: ${errInfo.split('\n')[0]}`;
+      this.micTestStatus = `Erro: ${errInfo.split('\n')[0]}`;
       this.errorMessage = `Detalhes:\n${errInfo}\n\nVerifique permissões do app nas Configurações.`;
       this.errorAlertOpen = true;
       console.error('diagnostic: recognizeNote error ->', e);
@@ -92,11 +120,13 @@ export class HomePage {
   }
 
   async startCommandRecognition() {
-    if (this.isListeningForCommand) {
+    if (this.isListeningForCommand || this.isSpeaking) {
       return;
     }
 
-    // Feature detection
+    this.stopFollowUpListening();
+    this.awaitingSaveCommand = false;
+
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) {
       this.errorMessage = 'Reconhecimento de voz não suportado neste WebView.';
@@ -110,27 +140,26 @@ export class HomePage {
     this.speechRecognition.maxAlternatives = 1;
 
     this.isListeningForCommand = true;
-    this.statusText = 'Escutando comando...';
+    this.statusText = 'Escutando... fale agora.';
 
     this.speechRecognition.onresult = async (event: any) => {
       try {
         const transcript = (event.results[0][0].transcript || '').toLowerCase().trim();
         console.log('diagnostic: speech transcript=', transcript);
-        // remove diacritics and punctuation for simpler matching
-        const normalized = transcript
-          .normalize('NFD')
-          .replace(/\p{Diacritic}/gu, '')
-          .replace(/[.,!?]/g, '')
-          .replace(/\s+/g, ' ')
-          .trim();
+        const normalized = this.normalizeTranscript(transcript);
         console.log('diagnostic: normalized transcript=', normalized);
+
+        if (this.lastResponseText && this.isSaveCommand(normalized)) {
+          this.stopFollowUpListening();
+          await this.saveResponseToFile();
+          return;
+        }
 
         if (normalized.startsWith('pergunta')) {
           const question = this.extractQuestion(normalized);
           if (!question) {
             this.ngZone.run(() => {
-              this.commandAlertMessage = 'Pergunta vazia. Por favor, fale algo após "pergunta".';
-              this.commandAlertOpen = true;
+              this.commandResponse = 'Pergunta vazia. Fale algo após "pergunta".';
               this.statusText = 'Pergunta inválida';
             });
             return;
@@ -138,49 +167,45 @@ export class HomePage {
 
           this.ngZone.run(() => {
             this.recognizedCommand = normalized;
-            this.commandResponse = 'Consultando LLM...';
-            this.commandAlertMessage = 'Consultando LLM...';
-            this.commandAlertOpen = true;
-            this.statusText = 'Enviando pergunta para LLM...';
+            this.commandResponse = 'Consultando...';
+            this.statusText = 'Enviando pergunta...';
           });
 
           try {
             const answer = await this.queryLLM(question);
+            const cleanAnswer = this.sanitizeForSpeech(answer).trim();
             this.ngZone.run(() => {
-              this.commandResponse = answer;
-              this.commandAlertMessage = answer;
+              this.commandResponse = cleanAnswer;
               this.statusText = 'Resposta recebida';
             });
-            await this.speak(answer);
+            await this.speakResponse(cleanAnswer);
           } catch (llmError) {
             console.error('diagnostic: queryLLM failed ->', llmError);
             this.ngZone.run(() => {
-              this.commandAlertMessage = 'Não foi possível obter resposta da LLM.';
               this.commandResponse = String(llmError || 'Erro desconhecido');
-              this.commandAlertOpen = true;
-              this.statusText = 'Erro na LLM';
+              this.errorMessage = 'Não foi possível obter resposta da IA.';
+              this.errorAlertOpen = true;
+              this.statusText = 'Erro na consulta';
             });
           }
 
           return;
         }
 
-        const commandResult = this.parseVoiceCommand(normalized);
+        const commandResult = this.voiceCommands.match(normalized);
+        const responseText = this.sanitizeForSpeech(commandResult.response).trim();
         this.ngZone.run(() => {
           this.recognizedCommand = normalized;
-          this.commandResponse = commandResult.response;
-          this.commandAlertMessage = commandResult.response;
-          this.commandAlertOpen = true;
+          this.commandResponse = responseText;
           this.statusText = commandResult.speak ? 'Comando reconhecido' : 'Comando não reconhecido';
-          if (commandResult.speak) {
-            console.log('diagnostic: command recognized, calling native TTS speak()');
-            this.speak(this.commandAlertMessage).catch((sPeakErr: any) => {
-              console.warn('diagnostic: native speak failed with error', sPeakErr);
-            });
-          } else {
-            console.log('diagnostic: command not spoken, response=', this.commandAlertMessage);
-          }
         });
+
+        if (commandResult.speak) {
+          console.log('diagnostic: command recognized, calling native TTS speak()');
+          await this.speakResponse(responseText);
+        } else {
+          console.log('diagnostic: command not spoken, response=', responseText);
+        }
       } catch (e) {
         console.error('diagnostic: speech onresult error ->', e);
         this.ngZone.run(() => {
@@ -201,7 +226,9 @@ export class HomePage {
     this.speechRecognition.onend = () => {
       this.ngZone.run(() => {
         this.isListeningForCommand = false;
-        this.statusText = 'Pronto para testar o microfone';
+        if (!this.isSpeaking && !this.awaitingSaveCommand) {
+          this.statusText = 'Pronto. Toque para falar com o Jarvis.';
+        }
       });
     };
 
@@ -213,13 +240,200 @@ export class HomePage {
         this.errorMessage = `Não foi possível iniciar reconhecimento de voz: ${startErr}`;
         this.errorAlertOpen = true;
         this.isListeningForCommand = false;
-        this.statusText = 'Pronto para testar o microfone';
+        this.statusText = 'Pronto. Toque para falar com o Jarvis.';
       });
     }
   }
 
+  async stopSpeaking() {
+    this.speechAborted = true;
+    this.stopFollowUpListening();
+
+    try {
+      await TextToSpeech.stop();
+    } catch (err) {
+      console.warn('diagnostic: TextToSpeech.stop failed', err);
+    }
+
+    this.ngZone.run(() => {
+      this.isSpeaking = false;
+      this.awaitingSaveCommand = false;
+      this.statusText = this.lastResponseText
+        ? 'Leitura interrompida. Toque no ícone de salvar ou fale um novo comando.'
+        : 'Pronto. Toque para falar com o Jarvis.';
+    });
+  }
+
+  private async speakResponse(text: string): Promise<void> {
+    this.lastResponseText = text;
+    await this.speak(text);
+
+    if (this.speechAborted) {
+      return;
+    }
+
+    this.ngZone.run(() => {
+      this.awaitingSaveCommand = true;
+      this.statusText = 'Diga "salvar resposta" para guardar o texto.';
+    });
+
+    await this.listenForSaveCommand();
+  }
+
+  private async listenForSaveCommand(): Promise<void> {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition || this.speechAborted) {
+      this.ngZone.run(() => {
+        this.awaitingSaveCommand = false;
+      });
+      return;
+    }
+
+    this.saveListenActive = true;
+    this.ngZone.run(() => {
+      this.isListeningForSave = true;
+    });
+
+    // O reconhecimento de voz encerra sozinho após poucos segundos de silêncio,
+    // então reiniciamos automaticamente até o comando ser dito ou a janela expirar.
+    const deadline = Date.now() + this.saveListenWindowMs;
+    let saved = false;
+
+    while (this.saveListenActive && !this.speechAborted && Date.now() < deadline) {
+      saved = await this.runSaveListenAttempt(SpeechRecognition);
+    }
+
+    this.saveListenActive = false;
+    this.ngZone.run(() => {
+      this.isListeningForSave = false;
+      if (!saved) {
+        this.awaitingSaveCommand = false;
+        if (!this.isSpeaking) {
+          this.statusText = 'Pronto. Toque para falar com o Jarvis.';
+        }
+      }
+    });
+  }
+
+  private runSaveListenAttempt(SpeechRecognition: any): Promise<boolean> {
+    return new Promise(resolve => {
+      this.followUpRecognition = new SpeechRecognition();
+      this.followUpRecognition.lang = 'pt-BR';
+      this.followUpRecognition.interimResults = false;
+      this.followUpRecognition.maxAlternatives = 1;
+
+      let settled = false;
+      const finish = (result: boolean) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        this.followUpRecognition = undefined;
+        resolve(result);
+      };
+
+      this.followUpRecognition.onresult = async (event: any) => {
+        const transcript = (event.results[0][0].transcript || '').toLowerCase().trim();
+        const normalized = this.normalizeTranscript(transcript);
+        console.log('diagnostic: follow-up transcript=', normalized);
+
+        if (this.isSaveCommand(normalized)) {
+          finish(true);
+          await this.saveResponseToFile();
+        } else {
+          finish(false);
+        }
+      };
+
+      this.followUpRecognition.onerror = (ev: any) => {
+        console.warn('diagnostic: follow-up speech error', ev);
+        finish(false);
+      };
+
+      this.followUpRecognition.onend = () => {
+        finish(false);
+      };
+
+      try {
+        this.followUpRecognition.start();
+      } catch (err) {
+        console.error('diagnostic: follow-up speech start failed ->', err);
+        finish(false);
+      }
+    });
+  }
+
+  async saveResponseToFile(): Promise<void> {
+    if (!this.lastResponseText) {
+      return;
+    }
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const filename = `jarvis-resposta-${timestamp}.txt`;
+
+    try {
+      await Filesystem.writeFile({
+        path: filename,
+        data: this.lastResponseText,
+        directory: Directory.Documents,
+        encoding: Encoding.UTF8,
+      });
+
+      this.ngZone.run(() => {
+        this.commandResponse = `Resposta salva em: ${filename}`;
+        this.statusText = 'Arquivo salvo com sucesso.';
+        this.awaitingSaveCommand = false;
+      });
+
+      await this.speak('Resposta salva com sucesso.');
+    } catch (err) {
+      console.error('diagnostic: saveResponseToFile failed ->', err);
+      this.ngZone.run(() => {
+        this.errorMessage = 'Não foi possível salvar a resposta em arquivo.';
+        this.errorAlertOpen = true;
+        this.statusText = 'Erro ao salvar arquivo';
+        this.awaitingSaveCommand = false;
+      });
+    }
+  }
+
+  private stopFollowUpListening() {
+    this.saveListenActive = false;
+
+    if (!this.followUpRecognition) {
+      return;
+    }
+
+    try {
+      this.followUpRecognition.abort();
+    } catch (err) {
+      console.warn('diagnostic: follow-up recognition abort failed', err);
+    }
+
+    this.followUpRecognition = undefined;
+    this.awaitingSaveCommand = false;
+  }
+
+  private isSaveCommand(normalized: string): boolean {
+    return normalized.includes('salvar resposta');
+  }
+
+  private normalizeTranscript(transcript: string): string {
+    return transcript
+      .normalize('NFD')
+      .replace(/\p{Diacritic}/gu, '')
+      .replace(/[.,!?]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
   private async speak(text: string): Promise<void> {
     console.log('diagnostic: speak() entered with text=', text);
+    this.speechAborted = false;
+    this.ngZone.run(() => {
+      this.isSpeaking = true;
+    });
+
     try {
       await TextToSpeech.speak({
         text,
@@ -234,42 +448,15 @@ export class HomePage {
     } catch (err) {
       console.error('diagnostic: TextToSpeech.speak failed', err);
       throw err;
+    } finally {
+      this.ngZone.run(() => {
+        this.isSpeaking = false;
+      });
     }
   }
 
-  private parseVoiceCommand(normalized: string): { response: string; speak: boolean } {
-    if (normalized === 'alo' || normalized === 'alô' || normalized === 'ola' || normalized === 'olá') {
-      return { response: 'Olá', speak: true };
-    }
-
-    if (normalized.includes('tudo bem') || normalized.includes('como voce esta') || normalized.includes('como voce vai')) {
-      return { response: 'Estou bem, obrigado. E você?', speak: true };
-    }
-
-    if (normalized.includes('qual e o seu nome') || normalized.includes('como te chama') || normalized.includes('voce se chama')) {
-      return { response: 'Meu nome é Novo Jarvis, seu assistente completo.', speak: true };
-    }
-
-    if (normalized.includes('que horas sao') || normalized.includes('que horas são') || normalized.includes('horas')) {
-      const now = new Date();
-      const hours = now.getHours().toString().padStart(2, '0');
-      const minutes = now.getMinutes().toString().padStart(2, '0');
-      return { response: `Agora são ${hours} horas e ${minutes} minutos.`, speak: true };
-    }
-
-    if (normalized.includes('acende a luz') || normalized.includes('liga a luz') || normalized.includes('liga luz')) {
-      return { response: 'Ligando as luzes.', speak: true };
-    }
-
-    if (normalized.includes('desliga a luz') || normalized.includes('apaga a luz') || normalized.includes('desliga luz')) {
-      return { response: 'Desligando as luzes.', speak: true };
-    }
-
-    if (normalized.includes('teste') || normalized.includes('teste de voz')) {
-      return { response: 'Teste de comando realizado com sucesso.', speak: true };
-    }
-
-    return { response: 'Desculpe, não entendi', speak: true };
+  private sanitizeForSpeech(text: string): string {
+    return text.replace(/[*#]/g, ' ');
   }
 
   private extractQuestion(normalized: string): string {
@@ -277,158 +464,87 @@ export class HomePage {
   }
 
   private async queryLLM(question: string): Promise<string> {
-  const apiUrl = environment.llmApiUrl;
-  const apiKey = environment.llmApiKey;
+    const apiUrl = environment.llmApiUrl;
+    const apiKey = environment.llmApiKey;
 
-  if (!apiUrl || !apiKey) {
-    throw new Error('LLM API não está configurada. Atualize src/environments/environment.ts.');
-  }
+    if (!apiUrl || !apiKey) {
+      throw new Error('LLM API não está configurada. Atualize src/environments/environment.ts.');
+    }
 
-  const requestBody = {
-    contents: [
-      {
-        parts: [
-          {
-            text: `Responda em português de forma clara e objetiva. Pergunta: ${question}`,
+    const requestBody = {
+      contents: [
+        {
+          parts: [
+            {
+              text: `Responda em português de forma clara e objetiva. Pergunta: ${question}`,
+            },
+          ],
+        },
+      ],
+    };
+
+    const urlWithKey = `${apiUrl}?key=${apiKey}`;
+    console.log('diagnostic: queryLLM - enviando para Gemini:', apiUrl);
+    console.log('diagnostic: queryLLM - pergunta:', question);
+
+    const maxTentativas = 5;
+
+    for (let tentativa = 1; tentativa <= maxTentativas; tentativa++) {
+      try {
+        const response = await fetch(urlWithKey, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
           },
-        ],
-      },
-    ],
-  }
+          body: JSON.stringify(requestBody),
+        });
 
-  const urlWithKey = `${apiUrl}?key=${apiKey}`;
-  console.log('diagnostic: queryLLM - enviando para Gemini:', apiUrl);
-  console.log('diagnostic: queryLLM - pergunta:', question);
+        console.log(
+          `diagnostic: queryLLM - tentativa ${tentativa}/${maxTentativas} - status:`,
+          response.status,
+          response.statusText
+        );
 
-  const maxTentativas = 5;
+        const data = await response.json();
+        console.log('diagnostic: queryLLM - resposta completa:', JSON.stringify(data));
 
-  for (let tentativa = 1; tentativa <= maxTentativas; tentativa++) {
-    try {
-    const response = await fetch(urlWithKey, {
-    method: 'POST',
-    headers: {
-    'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(requestBody),
-    });
+        if (!response.ok) {
+          const errorMessage =
+            data?.error?.message ||
+            data?.error?.errors?.[0]?.message ||
+            data?.message ||
+            response.statusText;
 
-    console.log(
-    `diagnostic: queryLLM - tentativa ${tentativa}/${maxTentativas} - status:`,
-    response.status,
-    response.statusText
-    );
+          console.error('diagnostic: queryLLM - erro HTTP:', errorMessage);
 
-    const data = await response.json();
-    console.log('diagnostic: queryLLM - resposta completa:', JSON.stringify(data));
+          if ((response.status === 429 || response.status === 503) && tentativa < maxTentativas) {
+            console.log(`diagnostic: aguardando nova tentativa (${tentativa}/${maxTentativas})`);
 
-    if (!response.ok) {
-    const errorMessage =
-    data?.error?.message ||
-    data?.error?.errors?.[0]?.message ||
-    data?.message ||
-    response.statusText;
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            continue;
+          }
 
-    console.error('diagnostic: queryLLM - erro HTTP:', errorMessage);
+          throw new Error(`Erro LLM: ${errorMessage}`);
+        }
 
-    if (
-    (response.status === 429 || response.status === 503) &&
-    tentativa < maxTentativas
-    ) {
-    console.log(
-    `diagnostic: aguardando nova tentativa (${tentativa}/${maxTentativas})`
-    );
+        const rawAnswer = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+        const answer = rawAnswer ? this.sanitizeForSpeech(rawAnswer) : 'Não foi possível obter uma resposta da LLM.';
 
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    continue;
-    }
+        console.log('diagnostic: queryLLM - resposta final:', answer);
+        return answer;
+      } catch (error) {
+        console.error('diagnostic: queryLLM - erro fetch:', error);
 
-    throw new Error(`Erro LLM: ${errorMessage}`);
-    }
+        if (tentativa >= maxTentativas) {
+          throw error;
+        }
 
-    const answer =
-    data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ||
-    'Não foi possível obter uma resposta da LLM.';
-
-    console.log('diagnostic: queryLLM - resposta final:', answer);
-    return answer;
-    } catch (error) {
-      console.error('diagnostic: queryLLM - erro fetch:', error);
-
-      if (tentativa >= maxTentativas) {
-        throw error;
+        await new Promise(resolve => setTimeout(resolve, 2000));
       }
-
-      await new Promise(resolve => setTimeout(resolve, 2000));
     }
+
+    throw new Error('Falha ao consultar a LLM após 5 tentativas.');
   }
-
- throw new Error('Falha ao consultar a LLM após 5 tentativas.');
-}
-  
-
-  // private async queryLLM(question: string): Promise<string> {
-  //   const apiUrl = environment.llmApiUrl;
-  //   const apiKey = environment.llmApiKey;
-
-  //   if (!apiUrl || !apiKey) {
-  //     throw new Error('LLM API não está configurada. Atualize src/environments/environment.ts.');
-  //   }
-
-  //   const requestBody = {
-  //     contents: [
-  //       {
-  //         parts: [
-  //           {
-  //             text: `Responda em português de forma clara e objetiva. Pergunta: ${question}`,
-  //           },
-  //         ],
-  //       },
-  //     ],
-  //     generationConfig: {
-  //       maxOutputTokens: 250,
-  //       temperature: 0.7,
-  //     },
-  //   };
-
-  //   const urlWithKey = `${apiUrl}?key=${apiKey}`;
-  //   console.log('diagnostic: queryLLM - enviando para Gemini:', apiUrl);
-  //   console.log('diagnostic: queryLLM - pergunta:', question);
-
-  //   try {
-  //     const response = await fetch(urlWithKey, {
-  //       method: 'POST',
-  //       headers: {
-  //         'Content-Type': 'application/json',
-  //       },
-  //       body: JSON.stringify(requestBody),
-  //     });
-
-  //     console.log('diagnostic: queryLLM - status:', response.status, response.statusText);
-
-  //     const data = await response.json();
-  //     console.log('diagnostic: queryLLM - resposta completa:', JSON.stringify(data));
-
-  //     if (!response.ok) {
-  //       const errorMessage = 
-  //         data?.error?.message || 
-  //         data?.error?.errors?.[0]?.message ||
-  //         data?.message || 
-  //         response.statusText;
-  //       console.error('diagnostic: queryLLM - erro HTTP:', errorMessage);
-  //       throw new Error(`Erro LLM: ${errorMessage}`);
-  //     }
-
-  //     const answer = 
-  //       data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ||
-  //       'Não foi possível obter uma resposta da LLM.';
-      
-  //     console.log('diagnostic: queryLLM - resposta final:', answer);
-  //     return answer;
-  //   } catch (error) {
-  //     console.error('diagnostic: queryLLM - erro fetch:', error);
-  //     throw error;
-  //   }
-  // }
 
   private async listenForSound(duration = 3000): Promise<boolean> {
     if (!this.analyser) {
@@ -469,20 +585,17 @@ export class HomePage {
         throw new Error('navigator.mediaDevices.getUserMedia not available');
       }
 
-      // Create AudioContext BEFORE getUserMedia for better compatibility
       if (!this.audioContext) {
         this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
         console.log('diagnostic: AudioContext created, state=', this.audioContext.state);
       }
 
-      // Resume AudioContext if suspended (common on WebViews after permission request)
       if (this.audioContext.state === 'suspended') {
         console.log('diagnostic: resuming suspended AudioContext...');
         await this.audioContext.resume();
         console.log('diagnostic: AudioContext resumed, state=', this.audioContext.state);
       }
 
-      // try to get devices first for diagnostics
       try {
         const devices = await navigator.mediaDevices.enumerateDevices();
         console.log('diagnostic: devices before getUserMedia ->', devices);
@@ -490,7 +603,6 @@ export class HomePage {
         console.warn('diagnostic: enumerateDevices failed before getUserMedia', e);
       }
 
-      // Use explicit audio constraints for better microphone access
       const audioConstraints = {
         audio: {
           echoCancellation: false,
@@ -544,64 +656,6 @@ export class HomePage {
     }
 
     throw new Error('API de microfone não suportada neste dispositivo');
-  }
-
-  private getCurrentFrequency(): number {
-    if (!this.analyser || !this.audioContext) {
-      return 0;
-    }
-
-    const buffer = new Float32Array(this.analyser.fftSize);
-    this.analyser.getFloatTimeDomainData(buffer);
-    return this.autoCorrelate(buffer, this.audioContext.sampleRate);
-  }
-
-  private autoCorrelate(buf: Float32Array, sampleRate: number): number {
-    const size = buf.length;
-    let bestOffset = -1;
-    let bestCorrelation = 0;
-    let lastCorrelation = 1;
-    let rms = 0;
-
-    for (let i = 0; i < size; i++) {
-      const val = buf[i];
-      rms += val * val;
-    }
-    rms = Math.sqrt(rms / size);
-    if (rms < 0.01) {
-      return 0;
-    }
-
-    const maxSamples = Math.floor(size / 2);
-    for (let offset = 1; offset < maxSamples; offset++) {
-      let correlation = 0;
-      for (let i = 0; i < maxSamples; i++) {
-        correlation += Math.abs(buf[i] - buf[i + offset]);
-      }
-      correlation = 1 - correlation / maxSamples;
-
-      if (correlation > 0.9 && correlation > lastCorrelation) {
-        bestCorrelation = correlation;
-        bestOffset = offset;
-      }
-
-      lastCorrelation = correlation;
-    }
-
-    if (bestOffset === -1 || bestCorrelation < 0.01) {
-      return 0;
-    }
-
-    return sampleRate / bestOffset;
-  }
-
-  private getNoteName(frequency: number): string {
-    const noteStrings = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
-    const noteNumber = 12 * (Math.log2(frequency / 440)) + 69;
-    const rounded = Math.round(noteNumber);
-    const octave = Math.floor(rounded / 12) - 1;
-    const note = noteStrings[(rounded + 120) % 12];
-    return `${note}${octave}`;
   }
 
   private wait(ms: number) {

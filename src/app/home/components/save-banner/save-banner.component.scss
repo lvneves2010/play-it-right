@@ -1,0 +1,42 @@
+.save-banner {
+  width: 100%;
+  max-width: 28rem;
+  margin: 0.5rem 0 1.5rem;
+  padding: 1rem 1.25rem;
+  border-radius: 1rem;
+  background: rgba(255, 196, 46, 0.15);
+  border: 1px solid rgba(255, 196, 46, 0.45);
+  color: #fff3c4;
+  text-align: center;
+
+  strong {
+    display: block;
+    font-size: 1.05rem;
+    margin-bottom: 0.35rem;
+    color: #ffe08a;
+  }
+
+  p {
+    margin: 0;
+    font-size: 0.95rem;
+    line-height: 1.5;
+    color: #f5e6b8;
+  }
+
+  em {
+    font-style: normal;
+    font-weight: 700;
+    color: #ffffff;
+  }
+}
+
+.save-listening {
+  display: inline-block;
+  margin-top: 0.75rem;
+  padding: 0.35rem 0.85rem;
+  border-radius: 999px;
+  background: rgba(123, 97, 255, 0.35);
+  color: #ffffff;
+  font-size: 0.85rem;
+  font-weight: 600;
+}

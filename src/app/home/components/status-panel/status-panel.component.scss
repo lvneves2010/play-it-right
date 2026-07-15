@@ -1,0 +1,41 @@
+.status-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  justify-content: center;
+  margin-bottom: 1rem;
+  width: 100%;
+  max-width: 38rem;
+}
+
+.status-chip,
+.note-chip {
+  padding: 0.75rem 1rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  color: #e9f2ff;
+  font-weight: 600;
+}
+
+.note-chip {
+  background: rgba(123, 97, 255, 0.18);
+}
+
+.save-icon-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border: none;
+  border-radius: 50%;
+  background: rgba(123, 97, 255, 0.35);
+  color: #ffffff;
+  cursor: pointer;
+  font-size: 1.2rem;
+
+  &:active {
+    transform: scale(0.94);
+  }
+}

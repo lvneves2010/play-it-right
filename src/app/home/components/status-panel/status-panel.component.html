@@ -1,0 +1,17 @@
+<div class="status-row">
+  <span class="status-chip">{{ statusText }}</span>
+  <span *ngIf="recognizedNote" class="note-chip">{{ recognizedNote }}</span>
+</div>
+
+<div class="status-row" *ngIf="recognizedCommand || commandResponse">
+  <span *ngIf="recognizedCommand" class="note-chip">Comando: {{ recognizedCommand }}</span>
+  <span *ngIf="commandResponse" class="note-chip">Resposta: {{ commandResponse }}</span>
+  <button
+    *ngIf="canSave"
+    type="button"
+    class="save-icon-btn"
+    (click)="save.emit()"
+    aria-label="Salvar resposta em arquivo">
+    <ion-icon name="save"></ion-icon>
+  </button>
+</div>
