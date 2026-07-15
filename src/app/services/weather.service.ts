@@ -1,5 +1,5 @@
 import { Injectable } from '@angular/core';
-import { Geolocation } from '@capacitor/geolocation';
+import { Geolocation, PermissionStatus } from '@capacitor/geolocation';
 
 const WEATHER_DESCRIPTIONS: Record<number, string> = {
   0: 'céu limpo',
@@ -53,15 +53,49 @@ export class WeatherService {
   }
 
   private async getCurrentCoordinates(): Promise<{ latitude: number; longitude: number }> {
+    await this.ensureLocationPermission();
+
     try {
       const position = await Geolocation.getCurrentPosition({
         enableHighAccuracy: false,
-        timeout: 10000,
+        timeout: 15000,
       });
       return { latitude: position.coords.latitude, longitude: position.coords.longitude };
     } catch (err) {
-      console.error('diagnostic: getCurrentCoordinates failed ->', err);
-      throw new Error('Não foi possível obter sua localização. Verifique se a permissão de localização está autorizada.');
+      console.error('diagnostic: getCurrentPosition failed ->', err);
+      throw new Error(
+        'Não consegui obter sua localização. Verifique se o GPS/localização está ativado no aparelho e se há sinal, e tente novamente.'
+      );
+    }
+  }
+
+  private async ensureLocationPermission(): Promise<void> {
+    let status: PermissionStatus;
+
+    try {
+      status = await Geolocation.checkPermissions();
+      console.log('diagnostic: geolocation permission status ->', JSON.stringify(status));
+    } catch (err) {
+      console.error('diagnostic: checkPermissions failed ->', err);
+      throw new Error('Não foi possível verificar a permissão de localização neste aparelho.');
+    }
+
+    if (status.location === 'granted' || status.coarseLocation === 'granted') {
+      return;
+    }
+
+    try {
+      status = await Geolocation.requestPermissions();
+      console.log('diagnostic: geolocation permission after request ->', JSON.stringify(status));
+    } catch (err) {
+      console.error('diagnostic: requestPermissions failed ->', err);
+      throw new Error('Não foi possível solicitar a permissão de localização.');
+    }
+
+    if (status.location !== 'granted' && status.coarseLocation !== 'granted') {
+      throw new Error(
+        'Permissão de localização negada. Ative em Ajustes do aparelho > Apps > K.I.R.A. > Permissões > Localização.'
+      );
     }
   }
 

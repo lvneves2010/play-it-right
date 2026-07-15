@@ -1,6 +1,6 @@
 {
   "name": "play-it-right",
-  "version": "0.0.33",
+  "version": "0.0.40",
   "author": "Ionic Framework",
   "homepage": "https://ionicframework.com/",
   "scripts": {
@@ -34,6 +34,7 @@
     "@capacitor/haptics": "8.0.2",
     "@capacitor/keyboard": "8.0.3",
     "@capacitor/status-bar": "8.0.2",
+    "@capawesome/capacitor-torch": "^8.0.1",
     "@ionic/angular": "^8.0.0",
     "ionicons": "^7.0.0",
     "rxjs": "~7.8.0",

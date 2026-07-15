@@ -2,11 +2,15 @@ import { Injectable } from '@angular/core';
 import voiceCommandsData from './voice-commands.json';
 import pkg from '../../../package.json';
 
+export type AsyncCommandKind = 'weather' | 'exitApp' | 'torchOn' | 'torchOff';
+
 export interface VoiceCommandMatch {
   response: string;
   speak: boolean;
-  /** Set when the response requires async/native work the caller must handle (e.g. weather). */
-  requiresAsyncHandling?: 'weather';
+  /** Set when the response requires async/native work the caller must handle (e.g. weather, torch). */
+  requiresAsyncHandling?: AsyncCommandKind;
+  /** False when nothing matched and this is the generic fallback response. */
+  matched: boolean;
 }
 
 interface VoiceCommandEntry {
@@ -14,8 +18,10 @@ interface VoiceCommandEntry {
   patterns: string[];
   response: string;
   speak?: boolean;
-  dynamic?: 'time' | 'date' | 'weekday' | 'tomorrow' | 'yesterday' | 'version' | 'weather';
+  dynamic?: 'time' | 'date' | 'weekday' | 'tomorrow' | 'yesterday' | 'version' | AsyncCommandKind;
 }
+
+const ASYNC_COMMAND_KINDS: ReadonlySet<string> = new Set(['weather', 'exitApp', 'torchOn', 'torchOff']);
 
 const WEEKDAYS = [
   'domingo',
@@ -42,7 +48,7 @@ const MONTHS = [
   'dezembro',
 ];
 
-const FALLBACK_RESPONSE: VoiceCommandMatch = { response: 'Desculpe, não entendi', speak: true };
+const FALLBACK_RESPONSE: VoiceCommandMatch = { response: 'Desculpe, não entendi', speak: true, matched: false };
 
 @Injectable({ providedIn: 'root' })
 export class VoiceCommandsService {
@@ -56,11 +62,16 @@ export class VoiceCommandsService {
       return FALLBACK_RESPONSE;
     }
 
-    if (entry.dynamic === 'weather') {
-      return { response: '', speak: entry.speak ?? true, requiresAsyncHandling: 'weather' };
+    if (entry.dynamic && ASYNC_COMMAND_KINDS.has(entry.dynamic)) {
+      return {
+        response: '',
+        speak: entry.speak ?? true,
+        requiresAsyncHandling: entry.dynamic as AsyncCommandKind,
+        matched: true,
+      };
     }
 
-    return { response: this.resolveResponse(entry), speak: entry.speak ?? true };
+    return { response: this.resolveResponse(entry), speak: entry.speak ?? true, matched: true };
   }
 
   // Casa por sequência de palavras inteiras, não por substring bruta:

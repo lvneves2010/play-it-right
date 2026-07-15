@@ -13,13 +13,15 @@ import { addIcons } from 'ionicons';
 import { mic, save } from 'ionicons/icons';
 import { TextToSpeech } from '@capacitor-community/text-to-speech';
 import { Directory, Encoding, Filesystem } from '@capacitor/filesystem';
+import { App } from '@capacitor/app';
+import { Torch } from '@capawesome/capacitor-torch';
 import { environment } from '../../environments/environment';
 import { BrandHeaderComponent } from './components/brand-header/brand-header.component';
 import { StatusPanelComponent } from './components/status-panel/status-panel.component';
 import { SaveBannerComponent } from './components/save-banner/save-banner.component';
 import { VoiceActionComponent } from './components/voice-action/voice-action.component';
 import { SettingsMenuComponent } from './components/settings-menu/settings-menu.component';
-import { VoiceCommandsService } from '../services/voice-commands.service';
+import { VoiceCommandsService, VoiceCommandMatch } from '../services/voice-commands.service';
 import { WeatherService } from '../services/weather.service';
 
 @Component({
@@ -212,70 +214,104 @@ export class HomePage {
         return;
       }
 
-      if (normalized.startsWith('kira')) {
-        const question = this.extractQuestion(normalized);
-        if (!question) {
+      const kiraRemainder = this.matchKiraTrigger(normalized);
+
+      if (kiraRemainder !== null) {
+        if (!kiraRemainder) {
           this.ngZone.run(() => {
             this.commandResponse = 'Pergunta vazia. Fale algo após "Kira".';
             this.statusText = 'Pergunta inválida';
+            this.resetAwaitingSave();
           });
           return;
         }
 
-        this.ngZone.run(() => {
-          this.recognizedCommand = normalized;
-          this.commandResponse = 'Consultando...';
-          this.statusText = 'Enviando pergunta...';
-        });
-
-        try {
-          const answer = await this.queryLLM(question);
-          const cleanAnswer = this.sanitizeForSpeech(answer).trim();
-          this.ngZone.run(() => {
-            this.commandResponse = cleanAnswer;
-            this.statusText = 'Resposta recebida';
-          });
-          await this.speakResponse(cleanAnswer);
-        } catch (llmError) {
-          console.error('diagnostic: queryLLM failed ->', llmError);
-          this.ngZone.run(() => {
-            this.commandResponse = String(llmError || 'Erro desconhecido');
-            this.errorMessage = 'Não foi possível obter resposta da IA.';
-            this.errorAlertOpen = true;
-            this.statusText = 'Erro na consulta';
-          });
+        // "Kira" funciona como uma ativação geral: tenta primeiro um comando
+        // conhecido (ex.: "Kira, feche o aplicativo") e só recorre à IA se
+        // a frase não corresponder a nenhum comando.
+        const commandResult = this.voiceCommands.match(kiraRemainder);
+        if (commandResult.matched) {
+          await this.executeCommandResult(normalized, commandResult);
+        } else {
+          await this.handleLlmQuestion(normalized, kiraRemainder);
         }
-
         return;
       }
 
       const commandResult = this.voiceCommands.match(normalized);
-
-      if (commandResult.requiresAsyncHandling === 'weather') {
-        await this.handleWeatherRequest(normalized);
-        return;
-      }
-
-      const responseText = this.sanitizeForSpeech(commandResult.response).trim();
-      this.ngZone.run(() => {
-        this.recognizedCommand = normalized;
-        this.commandResponse = responseText;
-        this.statusText = commandResult.speak ? 'Comando reconhecido' : 'Comando não reconhecido';
-      });
-
-      if (commandResult.speak) {
-        console.log('diagnostic: command recognized, calling native TTS speak()');
-        await this.speakResponse(responseText);
-      } else {
-        console.log('diagnostic: command not spoken, response=', responseText);
-      }
+      await this.executeCommandResult(normalized, commandResult);
     } catch (e) {
       console.error('diagnostic: processRecognizedCommand error ->', e);
       this.ngZone.run(() => {
         this.errorMessage = 'Erro ao processar resultado de voz.';
         this.errorAlertOpen = true;
+        this.resetAwaitingSave();
       });
     }
+  }
+
+  private async handleLlmQuestion(normalized: string, question: string): Promise<void> {
+    this.ngZone.run(() => {
+      this.recognizedCommand = normalized;
+      this.commandResponse = 'Consultando...';
+      this.statusText = 'Enviando pergunta...';
+    });
+
+    try {
+      const answer = await this.queryLLM(question);
+      const cleanAnswer = this.sanitizeForSpeech(answer).trim();
+      this.ngZone.run(() => {
+        this.commandResponse = cleanAnswer;
+        this.statusText = 'Resposta recebida';
+      });
+      await this.speakResponse(cleanAnswer);
+    } catch (llmError) {
+      console.error('diagnostic: queryLLM failed ->', llmError);
+      this.ngZone.run(() => {
+        this.commandResponse = String(llmError || 'Erro desconhecido');
+        this.errorMessage = 'Não foi possível obter resposta da IA.';
+        this.errorAlertOpen = true;
+        this.statusText = 'Erro na consulta';
+        this.resetAwaitingSave();
+      });
+    }
+  }
+
+  private async executeCommandResult(normalized: string, commandResult: VoiceCommandMatch): Promise<void> {
+    if (commandResult.requiresAsyncHandling === 'weather') {
+      await this.handleWeatherRequest(normalized);
+      return;
+    }
+
+    if (commandResult.requiresAsyncHandling === 'exitApp') {
+      await this.handleExitAppRequest(normalized);
+      return;
+    }
+
+    if (commandResult.requiresAsyncHandling === 'torchOn' || commandResult.requiresAsyncHandling === 'torchOff') {
+      await this.handleTorchRequest(normalized, commandResult.requiresAsyncHandling === 'torchOn');
+      return;
+    }
+
+    const responseText = this.sanitizeForSpeech(commandResult.response).trim();
+    this.ngZone.run(() => {
+      this.recognizedCommand = normalized;
+      this.commandResponse = responseText;
+      this.statusText = commandResult.speak ? 'Comando reconhecido' : 'Comando não reconhecido';
+    });
+
+    if (commandResult.speak) {
+      console.log('diagnostic: command recognized, calling native TTS speak()');
+      await this.speakResponse(responseText);
+    } else {
+      console.log('diagnostic: command not spoken, response=', responseText);
+      this.ngZone.run(() => this.resetAwaitingSave());
+    }
+  }
+
+  private resetAwaitingSave(): void {
+    this.awaitingSaveCommand = false;
+    this.isListeningForSave = false;
   }
 
   private async handleWeatherRequest(normalized: string): Promise<void> {
@@ -304,6 +340,63 @@ export class HomePage {
         this.errorMessage = message;
         this.errorAlertOpen = true;
         this.statusText = 'Erro na previsão';
+        this.resetAwaitingSave();
+      });
+    }
+  }
+
+  private async handleExitAppRequest(normalized: string): Promise<void> {
+    const farewell = 'Até logo! Encerrando o aplicativo.';
+
+    this.ngZone.run(() => {
+      this.recognizedCommand = normalized;
+      this.commandResponse = farewell;
+      this.statusText = 'Encerrando o aplicativo...';
+    });
+
+    try {
+      await this.speak(farewell);
+    } catch (err) {
+      console.warn('diagnostic: farewell speech before exit failed', err);
+    }
+
+    try {
+      await App.exitApp();
+    } catch (err) {
+      console.error('diagnostic: App.exitApp failed ->', err);
+      this.ngZone.run(() => {
+        this.errorMessage = 'Não foi possível encerrar o aplicativo automaticamente.';
+        this.errorAlertOpen = true;
+        this.resetAwaitingSave();
+      });
+    }
+  }
+
+  private async handleTorchRequest(normalized: string, turnOn: boolean): Promise<void> {
+    const responseText = turnOn ? 'Lanterna ligada.' : 'Lanterna desligada.';
+
+    this.ngZone.run(() => {
+      this.recognizedCommand = normalized;
+      this.commandResponse = responseText;
+      this.statusText = 'Comando reconhecido';
+    });
+
+    try {
+      if (turnOn) {
+        await Torch.enable();
+      } else {
+        await Torch.disable();
+      }
+      await this.speakResponse(responseText);
+    } catch (err) {
+      console.error('diagnostic: handleTorchRequest failed ->', err);
+      const message = 'Não consegui controlar a lanterna do aparelho agora.';
+      this.ngZone.run(() => {
+        this.commandResponse = message;
+        this.errorMessage = message;
+        this.errorAlertOpen = true;
+        this.statusText = 'Erro na lanterna';
+        this.resetAwaitingSave();
       });
     }
   }
@@ -502,8 +595,22 @@ export class HomePage {
     return text.replace(/[*#]/g, ' ');
   }
 
-  private extractQuestion(normalized: string): string {
-    return normalized.replace(/^kira[:\s]*/i, '').trim();
+  // O reconhecimento de voz às vezes transcreve "Kira" com grafias parecidas
+  // (kyra, kiara, quira...) ou antepõe uma palavra de preenchimento antes dela,
+  // então aceitamos variações e procuramos o gatilho nas duas primeiras palavras.
+  private static readonly KIRA_TRIGGER_WORDS = ['kira', 'kyra', 'kiara', 'quira', 'kirah'];
+
+  private matchKiraTrigger(normalized: string): string | null {
+    const words = normalized.split(' ').filter(Boolean);
+    const searchLimit = Math.min(2, words.length);
+
+    for (let i = 0; i < searchLimit; i++) {
+      if (HomePage.KIRA_TRIGGER_WORDS.includes(words[i])) {
+        return words.slice(i + 1).join(' ').trim();
+      }
+    }
+
+    return null;
   }
 
   private async queryLLM(question: string): Promise<string> {
