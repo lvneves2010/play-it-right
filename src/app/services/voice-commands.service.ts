@@ -5,6 +5,8 @@ import pkg from '../../../package.json';
 export interface VoiceCommandMatch {
   response: string;
   speak: boolean;
+  /** Set when the response requires async/native work the caller must handle (e.g. weather). */
+  requiresAsyncHandling?: 'weather';
 }
 
 interface VoiceCommandEntry {
@@ -12,7 +14,7 @@ interface VoiceCommandEntry {
   patterns: string[];
   response: string;
   speak?: boolean;
-  dynamic?: 'time' | 'date' | 'weekday' | 'tomorrow' | 'yesterday' | 'version';
+  dynamic?: 'time' | 'date' | 'weekday' | 'tomorrow' | 'yesterday' | 'version' | 'weather';
 }
 
 const WEEKDAYS = [
@@ -52,6 +54,10 @@ export class VoiceCommandsService {
 
     if (!entry) {
       return FALLBACK_RESPONSE;
+    }
+
+    if (entry.dynamic === 'weather') {
+      return { response: '', speak: entry.speak ?? true, requiresAsyncHandling: 'weather' };
     }
 
     return { response: this.resolveResponse(entry), speak: entry.speak ?? true };

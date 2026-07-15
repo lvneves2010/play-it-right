@@ -20,6 +20,7 @@ import { SaveBannerComponent } from './components/save-banner/save-banner.compon
 import { VoiceActionComponent } from './components/voice-action/voice-action.component';
 import { SettingsMenuComponent } from './components/settings-menu/settings-menu.component';
 import { VoiceCommandsService } from '../services/voice-commands.service';
+import { WeatherService } from '../services/weather.service';
 
 @Component({
   selector: 'app-home',
@@ -66,7 +67,11 @@ export class HomePage {
   private readonly saveListenWindowMs = 10000;
   lastResponseText: string | null = null;
 
-  constructor(private ngZone: NgZone, private voiceCommands: VoiceCommandsService) {
+  constructor(
+    private ngZone: NgZone,
+    private voiceCommands: VoiceCommandsService,
+    private weatherService: WeatherService
+  ) {
     addIcons({ mic, save });
   }
 
@@ -245,6 +250,12 @@ export class HomePage {
       }
 
       const commandResult = this.voiceCommands.match(normalized);
+
+      if (commandResult.requiresAsyncHandling === 'weather') {
+        await this.handleWeatherRequest(normalized);
+        return;
+      }
+
       const responseText = this.sanitizeForSpeech(commandResult.response).trim();
       this.ngZone.run(() => {
         this.recognizedCommand = normalized;
@@ -263,6 +274,36 @@ export class HomePage {
       this.ngZone.run(() => {
         this.errorMessage = 'Erro ao processar resultado de voz.';
         this.errorAlertOpen = true;
+      });
+    }
+  }
+
+  private async handleWeatherRequest(normalized: string): Promise<void> {
+    this.ngZone.run(() => {
+      this.recognizedCommand = normalized;
+      this.commandResponse = 'Consultando a previsão do tempo...';
+      this.statusText = 'Consultando previsão...';
+    });
+
+    try {
+      const summary = await this.weatherService.getForecastSummary();
+      const cleanSummary = this.sanitizeForSpeech(summary).trim();
+      this.ngZone.run(() => {
+        this.commandResponse = cleanSummary;
+        this.statusText = 'Previsão recebida';
+      });
+      await this.speakResponse(cleanSummary);
+    } catch (weatherError) {
+      console.error('diagnostic: handleWeatherRequest failed ->', weatherError);
+      const message =
+        weatherError instanceof Error
+          ? weatherError.message
+          : 'Não foi possível obter a previsão do tempo agora.';
+      this.ngZone.run(() => {
+        this.commandResponse = message;
+        this.errorMessage = message;
+        this.errorAlertOpen = true;
+        this.statusText = 'Erro na previsão';
       });
     }
   }
