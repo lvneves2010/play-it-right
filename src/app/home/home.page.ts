@@ -63,7 +63,7 @@ export class HomePage {
   private followUpRecognition?: any;
   private speechAborted = false;
   private saveListenActive = false;
-  private readonly saveListenWindowMs = 20000;
+  private readonly saveListenWindowMs = 10000;
   lastResponseText: string | null = null;
 
   constructor(private ngZone: NgZone, private voiceCommands: VoiceCommandsService) {
@@ -143,76 +143,11 @@ export class HomePage {
     this.statusText = 'Escutando... fale agora.';
 
     this.speechRecognition.onresult = async (event: any) => {
-      try {
-        const transcript = (event.results[0][0].transcript || '').toLowerCase().trim();
-        console.log('diagnostic: speech transcript=', transcript);
-        const normalized = this.normalizeTranscript(transcript);
-        console.log('diagnostic: normalized transcript=', normalized);
-
-        if (this.lastResponseText && this.isSaveCommand(normalized)) {
-          this.stopFollowUpListening();
-          await this.saveResponseToFile();
-          return;
-        }
-
-        if (normalized.startsWith('pergunta')) {
-          const question = this.extractQuestion(normalized);
-          if (!question) {
-            this.ngZone.run(() => {
-              this.commandResponse = 'Pergunta vazia. Fale algo após "pergunta".';
-              this.statusText = 'Pergunta inválida';
-            });
-            return;
-          }
-
-          this.ngZone.run(() => {
-            this.recognizedCommand = normalized;
-            this.commandResponse = 'Consultando...';
-            this.statusText = 'Enviando pergunta...';
-          });
-
-          try {
-            const answer = await this.queryLLM(question);
-            const cleanAnswer = this.sanitizeForSpeech(answer).trim();
-            this.ngZone.run(() => {
-              this.commandResponse = cleanAnswer;
-              this.statusText = 'Resposta recebida';
-            });
-            await this.speakResponse(cleanAnswer);
-          } catch (llmError) {
-            console.error('diagnostic: queryLLM failed ->', llmError);
-            this.ngZone.run(() => {
-              this.commandResponse = String(llmError || 'Erro desconhecido');
-              this.errorMessage = 'Não foi possível obter resposta da IA.';
-              this.errorAlertOpen = true;
-              this.statusText = 'Erro na consulta';
-            });
-          }
-
-          return;
-        }
-
-        const commandResult = this.voiceCommands.match(normalized);
-        const responseText = this.sanitizeForSpeech(commandResult.response).trim();
-        this.ngZone.run(() => {
-          this.recognizedCommand = normalized;
-          this.commandResponse = responseText;
-          this.statusText = commandResult.speak ? 'Comando reconhecido' : 'Comando não reconhecido';
-        });
-
-        if (commandResult.speak) {
-          console.log('diagnostic: command recognized, calling native TTS speak()');
-          await this.speakResponse(responseText);
-        } else {
-          console.log('diagnostic: command not spoken, response=', responseText);
-        }
-      } catch (e) {
-        console.error('diagnostic: speech onresult error ->', e);
-        this.ngZone.run(() => {
-          this.errorMessage = 'Erro ao processar resultado de voz.';
-          this.errorAlertOpen = true;
-        });
-      }
+      const transcript = (event.results[0][0].transcript || '').toLowerCase().trim();
+      console.log('diagnostic: speech transcript=', transcript);
+      const normalized = this.normalizeTranscript(transcript);
+      console.log('diagnostic: normalized transcript=', normalized);
+      await this.processRecognizedCommand(normalized);
     };
 
     this.speechRecognition.onerror = (ev: any) => {
@@ -264,6 +199,74 @@ export class HomePage {
     });
   }
 
+  private async processRecognizedCommand(normalized: string): Promise<void> {
+    try {
+      if (this.lastResponseText && this.isSaveCommand(normalized)) {
+        this.stopFollowUpListening();
+        await this.saveResponseToFile();
+        return;
+      }
+
+      if (normalized.startsWith('pergunta')) {
+        const question = this.extractQuestion(normalized);
+        if (!question) {
+          this.ngZone.run(() => {
+            this.commandResponse = 'Pergunta vazia. Fale algo após "pergunta".';
+            this.statusText = 'Pergunta inválida';
+          });
+          return;
+        }
+
+        this.ngZone.run(() => {
+          this.recognizedCommand = normalized;
+          this.commandResponse = 'Consultando...';
+          this.statusText = 'Enviando pergunta...';
+        });
+
+        try {
+          const answer = await this.queryLLM(question);
+          const cleanAnswer = this.sanitizeForSpeech(answer).trim();
+          this.ngZone.run(() => {
+            this.commandResponse = cleanAnswer;
+            this.statusText = 'Resposta recebida';
+          });
+          await this.speakResponse(cleanAnswer);
+        } catch (llmError) {
+          console.error('diagnostic: queryLLM failed ->', llmError);
+          this.ngZone.run(() => {
+            this.commandResponse = String(llmError || 'Erro desconhecido');
+            this.errorMessage = 'Não foi possível obter resposta da IA.';
+            this.errorAlertOpen = true;
+            this.statusText = 'Erro na consulta';
+          });
+        }
+
+        return;
+      }
+
+      const commandResult = this.voiceCommands.match(normalized);
+      const responseText = this.sanitizeForSpeech(commandResult.response).trim();
+      this.ngZone.run(() => {
+        this.recognizedCommand = normalized;
+        this.commandResponse = responseText;
+        this.statusText = commandResult.speak ? 'Comando reconhecido' : 'Comando não reconhecido';
+      });
+
+      if (commandResult.speak) {
+        console.log('diagnostic: command recognized, calling native TTS speak()');
+        await this.speakResponse(responseText);
+      } else {
+        console.log('diagnostic: command not spoken, response=', responseText);
+      }
+    } catch (e) {
+      console.error('diagnostic: processRecognizedCommand error ->', e);
+      this.ngZone.run(() => {
+        this.errorMessage = 'Erro ao processar resultado de voz.';
+        this.errorAlertOpen = true;
+      });
+    }
+  }
+
   private async speakResponse(text: string): Promise<void> {
     this.lastResponseText = text;
     await this.speak(text);
@@ -274,13 +277,13 @@ export class HomePage {
 
     this.ngZone.run(() => {
       this.awaitingSaveCommand = true;
-      this.statusText = 'Diga "salvar resposta" para guardar o texto.';
+      this.statusText = 'Pode falar outro comando, ou diga "salvar resposta" para guardar o texto.';
     });
 
-    await this.listenForSaveCommand();
+    await this.listenForFollowUpCommand();
   }
 
-  private async listenForSaveCommand(): Promise<void> {
+  private async listenForFollowUpCommand(): Promise<void> {
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition || this.speechAborted) {
       this.ngZone.run(() => {
@@ -295,18 +298,21 @@ export class HomePage {
     });
 
     // O reconhecimento de voz encerra sozinho após poucos segundos de silêncio,
-    // então reiniciamos automaticamente até o comando ser dito ou a janela expirar.
+    // então reiniciamos automaticamente até algo ser reconhecido ou a janela expirar.
     const deadline = Date.now() + this.saveListenWindowMs;
-    let saved = false;
+    let handled = false;
 
     while (this.saveListenActive && !this.speechAborted && Date.now() < deadline) {
-      saved = await this.runSaveListenAttempt(SpeechRecognition);
+      handled = await this.runFollowUpListenAttempt(SpeechRecognition);
+      if (handled) {
+        break;
+      }
     }
 
     this.saveListenActive = false;
     this.ngZone.run(() => {
       this.isListeningForSave = false;
-      if (!saved) {
+      if (!handled) {
         this.awaitingSaveCommand = false;
         if (!this.isSpeaking) {
           this.statusText = 'Pronto. Toque para falar com o Jarvis.';
@@ -315,7 +321,7 @@ export class HomePage {
     });
   }
 
-  private runSaveListenAttempt(SpeechRecognition: any): Promise<boolean> {
+  private runFollowUpListenAttempt(SpeechRecognition: any): Promise<boolean> {
     return new Promise(resolve => {
       this.followUpRecognition = new SpeechRecognition();
       this.followUpRecognition.lang = 'pt-BR';
@@ -337,12 +343,8 @@ export class HomePage {
         const normalized = this.normalizeTranscript(transcript);
         console.log('diagnostic: follow-up transcript=', normalized);
 
-        if (this.isSaveCommand(normalized)) {
-          finish(true);
-          await this.saveResponseToFile();
-        } else {
-          finish(false);
-        }
+        finish(true);
+        await this.processRecognizedCommand(normalized);
       };
 
       this.followUpRecognition.onerror = (ev: any) => {
