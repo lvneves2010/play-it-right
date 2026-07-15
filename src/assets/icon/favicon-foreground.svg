@@ -9,13 +9,11 @@
     </filter>
   </defs>
 
-  <rect width="256" height="256" rx="48" fill="#12192d"/>
-
-  <!-- kinetic orbit -->
+  <!-- kinetic orbit (sized within the adaptive-icon safe zone) -->
   <g transform="translate(128,128) rotate(-26)" opacity="0.8">
-    <ellipse cx="0" cy="0" rx="104" ry="48" fill="none" stroke="#57d7ff" stroke-width="5"/>
-    <circle cx="104" cy="0" r="8" fill="#57d7ff"/>
-    <circle cx="-104" cy="0" r="6" fill="#8b6dff"/>
+    <ellipse cx="0" cy="0" rx="80" ry="38" fill="none" stroke="#57d7ff" stroke-width="5"/>
+    <circle cx="80" cy="0" r="7" fill="#57d7ff"/>
+    <circle cx="-80" cy="0" r="5" fill="#8b6dff"/>
   </g>
 
   <!-- core -->

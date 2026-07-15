@@ -46,7 +46,7 @@ export class HomePage {
   recognizedNote: string | null = null;
   recognizedCommand: string | null = null;
   commandResponse: string | null = null;
-  statusText = 'Pronto. Toque para falar com o Jarvis.';
+  statusText = 'Pronto. Toque para falar com a Kira.';
   hasMicrophoneAccess = false;
   micTestStatus = '';
   isSpeaking = false;
@@ -162,7 +162,7 @@ export class HomePage {
       this.ngZone.run(() => {
         this.isListeningForCommand = false;
         if (!this.isSpeaking && !this.awaitingSaveCommand) {
-          this.statusText = 'Pronto. Toque para falar com o Jarvis.';
+          this.statusText = 'Pronto. Toque para falar com a Kira.';
         }
       });
     };
@@ -175,7 +175,7 @@ export class HomePage {
         this.errorMessage = `Não foi possível iniciar reconhecimento de voz: ${startErr}`;
         this.errorAlertOpen = true;
         this.isListeningForCommand = false;
-        this.statusText = 'Pronto. Toque para falar com o Jarvis.';
+        this.statusText = 'Pronto. Toque para falar com a Kira.';
       });
     }
   }
@@ -195,7 +195,7 @@ export class HomePage {
       this.awaitingSaveCommand = false;
       this.statusText = this.lastResponseText
         ? 'Leitura interrompida. Toque no ícone de salvar ou fale um novo comando.'
-        : 'Pronto. Toque para falar com o Jarvis.';
+        : 'Pronto. Toque para falar com a Kira.';
     });
   }
 
@@ -207,11 +207,11 @@ export class HomePage {
         return;
       }
 
-      if (normalized.startsWith('pergunta')) {
+      if (normalized.startsWith('kira')) {
         const question = this.extractQuestion(normalized);
         if (!question) {
           this.ngZone.run(() => {
-            this.commandResponse = 'Pergunta vazia. Fale algo após "pergunta".';
+            this.commandResponse = 'Pergunta vazia. Fale algo após "Kira".';
             this.statusText = 'Pergunta inválida';
           });
           return;
@@ -315,7 +315,7 @@ export class HomePage {
       if (!handled) {
         this.awaitingSaveCommand = false;
         if (!this.isSpeaking) {
-          this.statusText = 'Pronto. Toque para falar com o Jarvis.';
+          this.statusText = 'Pronto. Toque para falar com a Kira.';
         }
       }
     });
@@ -371,7 +371,7 @@ export class HomePage {
     }
 
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const filename = `jarvis-resposta-${timestamp}.txt`;
+    const filename = `kira-resposta-${timestamp}.txt`;
 
     try {
       await Filesystem.writeFile({
@@ -462,7 +462,7 @@ export class HomePage {
   }
 
   private extractQuestion(normalized: string): string {
-    return normalized.replace(/^pergunta[:\s]*/i, '').trim();
+    return normalized.replace(/^kira[:\s]*/i, '').trim();
   }
 
   private async queryLLM(question: string): Promise<string> {

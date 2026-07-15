@@ -1,7 +1,7 @@
 {
-  "name": "NOVO JARVIS",
-  "short_name": "NOVO JARVIS",
-  "description": "Seu assistente completo para reconhecimento de som e comandos.",
+  "name": "K.I.R.A. - Kinetic Interface for Responsive Automation",
+  "short_name": "K.I.R.A.",
+  "description": "Kinetic Interface for Responsive Automation - seu assistente completo para reconhecimento de som e comandos.",
   "start_url": ".",
   "display": "standalone",
   "background_color": "#12192d",

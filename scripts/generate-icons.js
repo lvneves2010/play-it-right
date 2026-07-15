@@ -4,8 +4,13 @@ const path = require('path');
 const sharp = require('sharp');
 
 const svgPath = path.resolve(__dirname, '../src/assets/icon/favicon.svg');
+const foregroundSvgPath = path.resolve(__dirname, '../src/assets/icon/favicon-foreground.svg');
 if (!fs.existsSync(svgPath)) {
   console.error('SVG icon not found at', svgPath);
+  process.exit(1);
+}
+if (!fs.existsSync(foregroundSvgPath)) {
+  console.error('Adaptive icon foreground SVG not found at', foregroundSvgPath);
   process.exit(1);
 }
 
@@ -37,13 +42,21 @@ const outBase = path.resolve(__dirname, '../android/app/src/main/res');
       .png()
       .toFile(outFileRound);
 
+    // Adaptive icon foreground layer: transparent background, artwork kept
+    // within the safe zone so it isn't clipped by the launcher's mask shape.
+    const outFileForeground = path.join(dir, 'ic_launcher_foreground.png');
+    await sharp(foregroundSvgPath)
+      .resize(size, size, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
+      .png()
+      .toFile(outFileForeground);
+
     console.log('Written', outFile);
   }
 
   // Create a simple adaptive icon xml (basic) for v26+ in mipmap-anydpi-v26
   const adaptiveDir = path.join(outBase, 'mipmap-anydpi-v26');
   if (!fs.existsSync(adaptiveDir)) fs.mkdirSync(adaptiveDir, { recursive: true });
-  const xml = `<?xml version="1.0" encoding="utf-8"?>\n<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">\n  <background android:drawable="@color/launcher_background"/>\n  <foreground android:drawable="@mipmap/ic_launcher"/>\n</adaptive-icon>`;
+  const xml = `<?xml version="1.0" encoding="utf-8"?>\n<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">\n  <background android:drawable="@color/launcher_background"/>\n  <foreground android:drawable="@mipmap/ic_launcher_foreground"/>\n</adaptive-icon>`;
   fs.writeFileSync(path.join(adaptiveDir, 'ic_launcher.xml'), xml);
   fs.writeFileSync(path.join(adaptiveDir, 'ic_launcher_round.xml'), xml);
   console.log('Written adaptive icon xml in', adaptiveDir);

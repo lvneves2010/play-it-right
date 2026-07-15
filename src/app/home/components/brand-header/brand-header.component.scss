@@ -22,8 +22,10 @@
 
 .brand-tag {
   display: block;
-  margin-top: 0.75rem;
-  font-size: 1rem;
+  margin: 0.75rem auto 0;
+  max-width: 22rem;
+  font-size: 0.95rem;
+  letter-spacing: 0.02em;
   color: #aec8ff;
   opacity: 0.95;
 }
